@@ -39,7 +39,13 @@ defmodule Cortex.MixProject do
       {:tailwind, "~> 0.2", runtime: Mix.env() == :dev},
       {:plug_cowboy, "~> 2.7"},
       {:floki, ">= 0.30.0", only: :test},
-      {:lazy_html, ">= 0.1.0", only: :test}
+      {:lazy_html, ">= 0.1.0", only: :test},
+
+      # Phase 9: Performance
+      {:benchee, "~> 1.3", only: :dev},
+
+      # Phase 10: SRE / Observability
+      {:telemetry, "~> 1.2"}
     ]
   end
 
