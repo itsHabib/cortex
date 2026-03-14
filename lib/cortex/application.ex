@@ -21,7 +21,13 @@ defmodule Cortex.Application do
         # Task.Supervisor for sandboxed tool execution
         {Task.Supervisor, name: Cortex.Tool.Supervisor},
         # Agent-backed tool registry for name -> module lookup
-        {Cortex.Tool.Registry, []}
+        {Cortex.Tool.Registry, []},
+        # Messaging: Registry for mailbox name lookups (agent_id -> mailbox pid)
+        {Registry, keys: :unique, name: Cortex.Messaging.MailboxRegistry},
+        # Messaging: Router singleton for message routing between agents
+        {Cortex.Messaging.Router, name: Cortex.Messaging.Router},
+        # Messaging: DynamicSupervisor for per-agent Mailbox processes
+        {Cortex.Messaging.Supervisor, name: Cortex.Messaging.Supervisor}
       ] ++ persistence_children() ++ web_children()
 
     opts = [strategy: :one_for_one, name: Cortex.Supervisor]
