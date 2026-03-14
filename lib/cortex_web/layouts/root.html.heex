@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <title>Cortex</title>
+    <script src="https://cdn.tailwindcss.com">
+    </script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              cortex: {
+                50: '#f0f9ff',
+                100: '#e0f2fe',
+                200: '#bae6fd',
+                300: '#7dd3fc',
+                400: '#38bdf8',
+                500: '#0ea5e9',
+                600: '#0284c7',
+                700: '#0369a1',
+                800: '#075985',
+                900: '#0c4a6e',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* LiveView specific styles */
+      .phx-no-feedback.invalid-feedback,
+      .phx-no-feedback .invalid-feedback {
+        display: none;
+      }
+      .phx-click-loading { opacity: 0.5; }
+      .phx-submit-loading .phx-submit-loading-indicator { display: inline; }
+      .phx-submit-loading .phx-submit-loading-hide { display: none; }
+    </style>
+    <script defer phx-track-static src="https://cdn.jsdelivr.net/npm/phoenix@1.7.18/priv/static/phoenix.min.js">
+    </script>
+    <script defer phx-track-static src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.0.4/priv/static/phoenix_live_view.min.js">
+    </script>
+    <script>
+      // Initialize LiveView once scripts are loaded
+      window.addEventListener("DOMContentLoaded", () => {
+        let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
+        let liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
+          params: { _csrf_token: csrfToken },
+          longPollFallbackMs: 2500
+        });
+        liveSocket.connect();
+        window.liveSocket = liveSocket;
+      });
+    </script>
+  </head>
+  <body class="h-full dark">
+    <div class="flex h-full">
+      <!-- Sidebar -->
+      <nav class="w-56 bg-gray-900 border-r border-gray-800 flex flex-col">
+        <div class="p-4 border-b border-gray-800">
+          <h1 class="text-xl font-bold text-white tracking-tight">
+            <span class="text-cortex-400">&#9670;</span> Cortex
+          </h1>
+          <p class="text-xs text-gray-500 mt-1">Multi-Agent Orchestration</p>
+        </div>
+        <div class="flex-1 py-4">
+          <a href="/" class="flex items-center px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+            <span class="mr-3 text-gray-500">&#9632;</span>
+            Dashboard
+          </a>
+          <a href="/runs" class="flex items-center px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+            <span class="mr-3 text-gray-500">&#9654;</span>
+            Runs
+          </a>
+          <a href="/new" class="flex items-center px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+            <span class="mr-3 text-gray-500">+</span>
+            New Run
+          </a>
+        </div>
+        <div class="p-4 border-t border-gray-800">
+          <p class="text-xs text-gray-600">v0.1.0</p>
+        </div>
+      </nav>
+      <!-- Main content -->
+      <main class="flex-1 overflow-auto bg-gray-950 text-gray-100">
+        {@inner_content}
+      </main>
+    </div>
+  </body>
+</html>

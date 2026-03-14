@@ -184,9 +184,18 @@ defmodule Cortex.Orchestration.OrchestrationQETest do
 
         # Verify result files exist for all 12 teams
         all_names = [
-          "infra", "auth", "logging", "database", "cache",
-          "api", "gateway", "events", "frontend", "mobile",
-          "workers", "integration"
+          "infra",
+          "auth",
+          "logging",
+          "database",
+          "cache",
+          "api",
+          "gateway",
+          "events",
+          "frontend",
+          "mobile",
+          "workers",
+          "integration"
         ]
 
         for name <- all_names do
