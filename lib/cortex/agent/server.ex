@@ -33,7 +33,7 @@ defmodule Cortex.Agent.Server do
 
   """
 
-  use GenServer
+  use GenServer, restart: :temporary
 
   alias Cortex.Agent.Config
   alias Cortex.Agent.State
