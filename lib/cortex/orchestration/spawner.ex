@@ -89,6 +89,7 @@ defmodule Cortex.Orchestration.Spawner do
       prompt,
       "--output-format",
       "stream-json",
+      "--verbose",
       "--model",
       model,
       "--max-turns",
@@ -106,11 +107,27 @@ defmodule Cortex.Orchestration.Spawner do
     end
   end
 
+  defp shell_escape(arg) do
+    "'" <> String.replace(arg, "'", "'\\''") <> "'"
+  end
+
   @spec open_port(charlist(), [String.t()]) :: port()
   defp open_port(command_path, args) do
+    # Strip CLAUDECODE env var so child claude processes don't refuse to start
+    # (matches the Go agent-orchestra behavior)
+    env =
+      System.get_env()
+      |> Map.drop(["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"])
+      |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+
+    # Use /bin/sh wrapper to redirect stdin from /dev/null.
+    # claude -p hangs if stdin stays open (it waits for input).
+    escaped_args = Enum.map(args, &shell_escape/1)
+    shell_cmd = Enum.join([to_string(command_path) | escaped_args], " ") <> " </dev/null"
+
     Port.open(
-      {:spawn_executable, command_path},
-      [:binary, :exit_status, :stderr_to_stdout, {:args, args}]
+      {:spawn_executable, ~c"/bin/sh"},
+      [:binary, :exit_status, :use_stdio, {:args, ["-c", shell_cmd]}, {:env, env}]
     )
   end
 
