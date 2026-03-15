@@ -75,6 +75,7 @@ defmodule Cortex.Orchestration.Spawner do
 
     try do
       port = open_port(command_path, args, cwd)
+      notify_port_opened(Keyword.get(opts, :on_port_opened), team_name, port)
       timer_ref = Process.send_after(self(), {:spawner_timeout, port}, timeout_ms)
 
       result =
@@ -116,6 +117,7 @@ defmodule Cortex.Orchestration.Spawner do
 
     try do
       port = open_port(command_path, args, cwd)
+      notify_port_opened(Keyword.get(opts, :on_port_opened), team_name, port)
       timer_ref = Process.send_after(self(), {:spawner_timeout, port}, timeout_ms)
 
       result =
@@ -279,15 +281,19 @@ defmodule Cortex.Orchestration.Spawner do
           parse_lines(lines, state.session_id, state.result_line)
 
         new_tokens = accumulate_tokens(state.tokens, usage_deltas)
-        maybe_notify_tokens(state.on_token_update, state.team_name, state.tokens, new_tokens)
-        maybe_notify_activities(state.on_activity, state.team_name, activities)
+        safe_notify_tokens(state.on_token_update, state.team_name, state.tokens, new_tokens)
+        safe_notify_activities(state.on_activity, state.team_name, activities)
 
         # Notify when session_id is first captured (so it can be persisted immediately)
         if new_session_id && state.session_id == nil && state.on_activity do
-          state.on_activity.(state.team_name, %{
-            type: :session_started,
-            session_id: new_session_id
-          })
+          try do
+            state.on_activity.(state.team_name, %{
+              type: :session_started,
+              session_id: new_session_id
+            })
+          rescue
+            _ -> :ok
+          end
         end
 
         # Keep last 2KB of output for error diagnosis
@@ -457,25 +463,29 @@ defmodule Cortex.Orchestration.Spawner do
 
   defp extract_activity(_), do: nil
 
-  @spec maybe_notify_activities(function() | nil, String.t(), [map()]) :: :ok
-  defp maybe_notify_activities(nil, _team_name, _activities), do: :ok
-  defp maybe_notify_activities(_callback, _team_name, []), do: :ok
+  @spec safe_notify_activities(function() | nil, String.t(), [map()]) :: :ok
+  defp safe_notify_activities(nil, _team_name, _activities), do: :ok
+  defp safe_notify_activities(_callback, _team_name, []), do: :ok
 
-  defp maybe_notify_activities(callback, team_name, activities) do
+  defp safe_notify_activities(callback, team_name, activities) do
     Enum.each(activities, fn activity ->
       callback.(team_name, activity)
     end)
 
     :ok
+  rescue
+    _ -> :ok
   end
 
-  @spec maybe_notify_tokens(function() | nil, String.t(), map(), map()) :: :ok
-  defp maybe_notify_tokens(nil, _team_name, _old, _new), do: :ok
-  defp maybe_notify_tokens(_callback, _team_name, same, same), do: :ok
+  @spec safe_notify_tokens(function() | nil, String.t(), map(), map()) :: :ok
+  defp safe_notify_tokens(nil, _team_name, _old, _new), do: :ok
+  defp safe_notify_tokens(_callback, _team_name, same, same), do: :ok
 
-  defp maybe_notify_tokens(callback, team_name, _old_tokens, new_tokens) do
+  defp safe_notify_tokens(callback, team_name, _old_tokens, new_tokens) do
     callback.(team_name, new_tokens)
     :ok
+  rescue
+    _ -> :ok
   end
 
   @spec build_team_result(String.t(), String.t() | nil, map() | nil) ::
@@ -533,6 +543,22 @@ defmodule Cortex.Orchestration.Spawner do
   @spec write_to_log(File.io_device() | nil, binary()) :: :ok
   defp write_to_log(nil, _data), do: :ok
   defp write_to_log(device, data), do: IO.binwrite(device, data)
+
+  @spec notify_port_opened(function() | nil, String.t(), port()) :: :ok
+  defp notify_port_opened(nil, _team_name, _port), do: :ok
+
+  defp notify_port_opened(callback, team_name, port) do
+    os_pid =
+      case Port.info(port, :os_pid) do
+        {:os_pid, pid} -> pid
+        _ -> nil
+      end
+
+    callback.(team_name, os_pid)
+    :ok
+  rescue
+    _ -> :ok
+  end
 
   @spec kill_port(port()) :: true
   defp kill_port(port) do

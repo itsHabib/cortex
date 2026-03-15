@@ -910,6 +910,12 @@ defmodule Cortex.Orchestration.Runner do
       end
     end
 
+    on_port_opened = fn name, os_pid ->
+      if os_pid do
+        Workspace.update_registry_entry(workspace, name, pid: os_pid)
+      end
+    end
+
     spawner_opts = [
       team_name: team_name,
       prompt: prompt,
@@ -921,7 +927,8 @@ defmodule Cortex.Orchestration.Runner do
       command: command,
       cwd: workspace.path,
       on_token_update: on_token_update,
-      on_activity: on_activity
+      on_activity: on_activity,
+      on_port_opened: on_port_opened
     ]
 
     case Spawner.spawn(spawner_opts) do
@@ -1130,7 +1137,8 @@ defmodule Cortex.Orchestration.Runner do
 
   @spec safe_start_watcher(keyword()) :: pid() | nil
   defp safe_start_watcher(opts) do
-    case Cortex.Messaging.OutboxWatcher.start_link(opts) do
+    # Use start/1 (not start_link) so a watcher crash doesn't kill the coordinator
+    case Cortex.Messaging.OutboxWatcher.start(opts) do
       {:ok, pid} -> pid
       _ -> nil
     end

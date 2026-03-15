@@ -74,14 +74,21 @@ defmodule Cortex.Orchestration.LogParser do
         case Jason.decode(line) do
           {:ok, parsed} ->
             {new_entries, new_state} = process_line(parsed, idx, state)
-            {entries ++ new_entries, new_state}
+
+            # Fill in missing timestamps with last known timestamp
+            filled_entries =
+              Enum.map(new_entries, fn entry ->
+                if entry.timestamp, do: entry, else: %{entry | timestamp: new_state.last_timestamp}
+              end)
+
+            {entries ++ filled_entries, new_state}
 
           {:error, _} ->
             entry = %{
               index: idx,
               type: :parse_error,
               detail: truncate(line, 100),
-              timestamp: nil,
+              timestamp: state.last_timestamp,
               tools: []
             }
 
@@ -192,16 +199,17 @@ defmodule Cortex.Orchestration.LogParser do
 
   defp process_line(%{"type" => "system", "subtype" => "init"} = parsed, idx, state) do
     session_id = Map.get(parsed, "session_id")
+    timestamp = extract_timestamp(parsed)
 
     entry = %{
       index: idx,
       type: :session_start,
       detail: "session started (#{short_id(session_id)})",
-      timestamp: nil,
+      timestamp: timestamp,
       tools: []
     }
 
-    {[entry], %{state | session_id: session_id}}
+    {[entry], %{state | session_id: session_id, last_timestamp: timestamp || state.last_timestamp}}
   end
 
   defp process_line(%{"type" => "assistant", "message" => msg}, idx, state) do
@@ -371,6 +379,7 @@ defmodule Cortex.Orchestration.LogParser do
     result_text = Map.get(parsed, "result", "")
     cost = Map.get(parsed, "total_cost_usd") || Map.get(parsed, "cost_usd")
     session_id = Map.get(parsed, "session_id")
+    timestamp = extract_timestamp(parsed) || state.last_timestamp
 
     usage = Map.get(parsed, "usage", %{})
     input_tokens = Map.get(usage, "input_tokens", 0)
@@ -390,7 +399,7 @@ defmodule Cortex.Orchestration.LogParser do
       index: idx,
       type: :result,
       detail: detail,
-      timestamp: nil,
+      timestamp: timestamp,
       tools: []
     }
 
@@ -408,15 +417,16 @@ defmodule Cortex.Orchestration.LogParser do
     {[entry], new_state}
   end
 
-  defp process_line(%{"type" => "content_block_start", "content_block" => block}, idx, state) do
+  defp process_line(%{"type" => "content_block_start", "content_block" => block} = parsed, idx, state) do
     if Map.get(block, "type") == "tool_use" do
       name = Map.get(block, "name", "unknown")
+      timestamp = extract_timestamp(parsed) || state.last_timestamp
 
       entry = %{
         index: idx,
         type: :tool_start,
         detail: name,
-        timestamp: nil,
+        timestamp: timestamp,
         tools: [name]
       }
 
@@ -424,6 +434,32 @@ defmodule Cortex.Orchestration.LogParser do
     else
       {[], state}
     end
+  end
+
+  defp process_line(%{"type" => "system", "subtype" => subtype} = parsed, idx, state)
+       when subtype in ["task_progress", "task_notification"] do
+    timestamp = extract_timestamp(parsed) || state.last_timestamp
+    description = Map.get(parsed, "description", subtype)
+    task_status = Map.get(parsed, "status")
+    last_tool = Map.get(parsed, "last_tool_name")
+
+    detail =
+      case task_status do
+        "completed" -> "subagent done: #{truncate(description, 80)}"
+        _ -> "subagent: #{truncate(description, 80)}"
+      end
+
+    tools = if last_tool, do: [last_tool], else: []
+
+    entry = %{
+      index: idx,
+      type: if(task_status == "completed", do: :tool_result, else: :tool_use),
+      detail: detail,
+      timestamp: timestamp,
+      tools: tools
+    }
+
+    {[entry], %{state | last_timestamp: timestamp || state.last_timestamp}}
   end
 
   defp process_line(_parsed, _idx, state) do

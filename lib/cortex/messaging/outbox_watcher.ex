@@ -32,6 +32,17 @@ defmodule Cortex.Messaging.OutboxWatcher do
     GenServer.start_link(__MODULE__, opts)
   end
 
+  @doc """
+  Starts an outbox watcher NOT linked to the calling process.
+
+  Use this instead of `start_link/1` when the caller (e.g., a Runner
+  coordinator) should not be killed if the watcher crashes.
+  """
+  @spec start(keyword()) :: GenServer.on_start()
+  def start(opts) do
+    GenServer.start(__MODULE__, opts)
+  end
+
   @impl true
   def init(opts) do
     workspace_path = Keyword.fetch!(opts, :workspace_path)

@@ -29,7 +29,9 @@ defmodule Cortex.Application do
         # Messaging: Router singleton for message routing between agents
         {Cortex.Messaging.Router, name: Cortex.Messaging.Router},
         # Messaging: DynamicSupervisor for per-agent Mailbox processes
-        {Cortex.Messaging.Supervisor, name: Cortex.Messaging.Supervisor}
+        {Cortex.Messaging.Supervisor, name: Cortex.Messaging.Supervisor},
+        # Workspace: serializes read-modify-write operations on workspace JSON files
+        Cortex.Orchestration.WorkspaceLock
       ] ++ persistence_children() ++ web_children()
 
     opts = [strategy: :one_for_one, name: Cortex.Supervisor]

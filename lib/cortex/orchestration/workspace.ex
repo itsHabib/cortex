@@ -33,6 +33,7 @@ defmodule Cortex.Orchestration.Workspace do
   alias Cortex.Orchestration.TeamState
   alias Cortex.Orchestration.RunRegistry
   alias Cortex.Orchestration.RegistryEntry
+  alias Cortex.Orchestration.WorkspaceLock
 
   defstruct [:path]
 
@@ -171,12 +172,14 @@ defmodule Cortex.Orchestration.Workspace do
   @spec update_team_state(t(), String.t(), keyword()) :: :ok | {:error, term()}
   def update_team_state(%__MODULE__{} = workspace, team_name, updates)
       when is_binary(team_name) and is_list(updates) do
-    with {:ok, state} <- read_state(workspace) do
-      current_ts = Map.get(state.teams, team_name, %TeamState{})
-      updated_ts = TeamState.merge(current_ts, updates)
-      updated_state = %{state | teams: Map.put(state.teams, team_name, updated_ts)}
-      write_state(workspace, updated_state)
-    end
+    WorkspaceLock.serialize({:state, workspace.path}, fn ->
+      with {:ok, state} <- read_state(workspace) do
+        current_ts = Map.get(state.teams, team_name, %TeamState{})
+        updated_ts = TeamState.merge(current_ts, updates)
+        updated_state = %{state | teams: Map.put(state.teams, team_name, updated_ts)}
+        write_state(workspace, updated_state)
+      end
+    end)
   end
 
   # --- Registry Operations ---
@@ -234,10 +237,12 @@ defmodule Cortex.Orchestration.Workspace do
   @spec update_registry_entry(t(), String.t(), keyword()) :: :ok | {:error, term()}
   def update_registry_entry(%__MODULE__{} = workspace, team_name, updates)
       when is_binary(team_name) and is_list(updates) do
-    with {:ok, registry} <- read_registry(workspace) do
-      updated_registry = RunRegistry.update_entry(registry, team_name, updates)
-      write_registry(workspace, updated_registry)
-    end
+    WorkspaceLock.serialize({:registry, workspace.path}, fn ->
+      with {:ok, registry} <- read_registry(workspace) do
+        updated_registry = RunRegistry.update_entry(registry, team_name, updates)
+        write_registry(workspace, updated_registry)
+      end
+    end)
   end
 
   # --- Result Operations ---
