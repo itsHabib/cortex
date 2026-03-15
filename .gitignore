@@ -30,6 +30,9 @@ cortex-*.tar
 *.db-wal
 *.db-shm
 
+# Cortex runtime state (logs, results, registry, messages)
+.cortex/
+
 # Editor and IDE files
 .elixir_ls/
 .vscode/
