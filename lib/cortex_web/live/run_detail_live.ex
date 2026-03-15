@@ -39,7 +39,14 @@ defmodule CortexWeb.RunDetailLive do
 
   @impl true
   def handle_info(%{type: type, payload: _payload}, socket)
-      when type in [:team_started, :team_completed, :tier_completed, :run_completed] do
+      when type in [
+             :run_started,
+             :team_started,
+             :team_completed,
+             :tier_started,
+             :tier_completed,
+             :run_completed
+           ] do
     case socket.assigns.run do
       nil ->
         {:noreply, socket}

@@ -79,13 +79,14 @@ defmodule Cortex.Orchestration.Runner do
     dry_run = Keyword.get(opts, :dry_run, false)
     workspace_path = Keyword.get(opts, :workspace_path, ".")
     command = Keyword.get(opts, :command, "claude")
+    run_id = Keyword.get(opts, :run_id)
 
     with {:ok, config, _warnings} <- Loader.load(config_path),
          {:ok, tiers} <- DAG.build_tiers(config.teams) do
       if dry_run do
         build_dry_run_plan(config, tiers)
       else
-        execute(config, tiers, workspace_path, command, continue_on_error)
+        execute(config, tiers, workspace_path, command, continue_on_error, run_id)
       end
     else
       {:error, _} = error -> error
@@ -151,11 +152,42 @@ defmodule Cortex.Orchestration.Runner do
 
   # -- Execution ---------------------------------------------------------------
 
-  @spec execute(Config.t(), [[String.t()]], String.t(), String.t(), boolean()) ::
+  @spec execute(Config.t(), [[String.t()]], String.t(), String.t(), boolean(), String.t() | nil) ::
           {:ok, map()} | {:error, term()}
-  defp execute(config, tiers, workspace_path, command, continue_on_error) do
+  defp execute(config, tiers, workspace_path, command, continue_on_error, run_id) do
     team_names = Enum.map(config.teams, & &1.name)
     ws_config = %{project: config.name, teams: team_names}
+
+    # If no run_id provided (CLI mode), try to create a Run record
+    run_id =
+      if run_id do
+        safe_store_call(fn ->
+          case Cortex.Store.get_run(run_id) do
+            nil ->
+              nil
+
+            run ->
+              Cortex.Store.update_run(run, %{
+                status: "running",
+                started_at: DateTime.utc_now()
+              })
+
+              run_id
+          end
+        end) || run_id
+      else
+        safe_store_call(fn ->
+          case Cortex.Store.create_run(%{
+                 name: config.name,
+                 status: "running",
+                 team_count: length(team_names),
+                 started_at: DateTime.utc_now()
+               }) do
+            {:ok, run} -> run.id
+            _ -> nil
+          end
+        end)
+      end
 
     with {:ok, workspace} <- Workspace.init(workspace_path, ws_config) do
       broadcast(:run_started, %{project: config.name, teams: team_names})
@@ -163,13 +195,37 @@ defmodule Cortex.Orchestration.Runner do
       run_start = System.monotonic_time(:millisecond)
 
       result =
-        run_tiers(tiers, config, workspace, command, continue_on_error)
+        run_tiers(tiers, config, workspace, command, continue_on_error, run_id)
 
       run_duration = System.monotonic_time(:millisecond) - run_start
 
       case result do
         {:ok, _} ->
           broadcast(:run_completed, %{project: config.name, duration_ms: run_duration})
+
+          safe_store_call(fn ->
+            if run_id do
+              {:ok, state} = Workspace.read_state(workspace)
+
+              total_cost =
+                state.teams
+                |> Map.values()
+                |> Enum.map(fn ts -> ts.cost_usd || 0.0 end)
+                |> Enum.sum()
+
+              run = Cortex.Store.get_run(run_id)
+
+              if run do
+                Cortex.Store.update_run(run, %{
+                  status: "completed",
+                  total_cost_usd: total_cost,
+                  total_duration_ms: run_duration,
+                  completed_at: DateTime.utc_now()
+                })
+              end
+            end
+          end)
+
           build_summary(config, workspace, run_duration)
 
         {:error, {:tier_failed, _tier_index, _failures}} = error ->
@@ -179,14 +235,35 @@ defmodule Cortex.Orchestration.Runner do
             status: :failed
           })
 
+          safe_store_call(fn ->
+            if run_id do
+              run = Cortex.Store.get_run(run_id)
+
+              if run do
+                Cortex.Store.update_run(run, %{
+                  status: "failed",
+                  total_duration_ms: run_duration,
+                  completed_at: DateTime.utc_now()
+                })
+              end
+            end
+          end)
+
           error
       end
     end
   end
 
-  @spec run_tiers([[String.t()]], Config.t(), Workspace.t(), String.t(), boolean()) ::
+  @spec run_tiers(
+          [[String.t()]],
+          Config.t(),
+          Workspace.t(),
+          String.t(),
+          boolean(),
+          String.t() | nil
+        ) ::
           {:ok, :complete} | {:error, {:tier_failed, non_neg_integer(), [String.t()]}}
-  defp run_tiers(tiers, config, workspace, command, continue_on_error) do
+  defp run_tiers(tiers, config, workspace, command, continue_on_error, run_id) do
     tiers
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, :complete}, fn {team_names, tier_index}, acc ->
@@ -201,6 +278,22 @@ defmodule Cortex.Orchestration.Runner do
       Enum.each(team_names, fn name ->
         Workspace.update_team_state(workspace, name, status: "running")
         Workspace.update_registry_entry(workspace, name, status: "running", started_at: now)
+
+        # Persist team start to Store
+        safe_store_call(fn ->
+          if run_id do
+            team = find_team(config.teams, name)
+
+            Cortex.Store.create_team_run(%{
+              run_id: run_id,
+              team_name: name,
+              role: team && team.lead && team.lead.role,
+              tier: tier_index,
+              status: "running",
+              started_at: DateTime.utc_now()
+            })
+          end
+        end)
       end)
 
       # Spawn all teams in parallel, each returns an outcome tuple
@@ -216,6 +309,7 @@ defmodule Cortex.Orchestration.Runner do
       # Apply workspace updates sequentially to avoid read-modify-write races
       Enum.each(outcomes, fn outcome ->
         apply_outcome(workspace, outcome)
+        apply_store_outcome(run_id, outcome)
       end)
 
       failures =
@@ -332,6 +426,94 @@ defmodule Cortex.Orchestration.Runner do
     )
 
     :ok
+  end
+
+  # -- Store Persistence (best-effort, wrapped in try/rescue) ----------------
+
+  @spec apply_store_outcome(String.t() | nil, {String.t(), term(), map()}) :: :ok
+  defp apply_store_outcome(nil, _outcome), do: :ok
+
+  defp apply_store_outcome(run_id, {team_name, _status, %{type: :success, result: result}}) do
+    safe_store_call(fn ->
+      case Cortex.Store.get_team_run(run_id, team_name) do
+        nil ->
+          :ok
+
+        team_run ->
+          Cortex.Store.update_team_run(team_run, %{
+            status: "completed",
+            cost_usd: result.cost_usd,
+            duration_ms: result.duration_ms,
+            num_turns: result.num_turns,
+            session_id: result.session_id,
+            result_summary: truncate_summary(result.result),
+            completed_at: DateTime.utc_now()
+          })
+      end
+    end)
+
+    :ok
+  end
+
+  defp apply_store_outcome(run_id, {team_name, _status, %{type: :failure, result: result}}) do
+    safe_store_call(fn ->
+      case Cortex.Store.get_team_run(run_id, team_name) do
+        nil ->
+          :ok
+
+        team_run ->
+          Cortex.Store.update_team_run(team_run, %{
+            status: "failed",
+            cost_usd: result.cost_usd,
+            duration_ms: result.duration_ms,
+            num_turns: result.num_turns,
+            session_id: result.session_id,
+            result_summary: truncate_summary(result.result),
+            completed_at: DateTime.utc_now()
+          })
+      end
+    end)
+
+    :ok
+  end
+
+  defp apply_store_outcome(run_id, {team_name, _status, %{type: :error, reason: reason}}) do
+    safe_store_call(fn ->
+      case Cortex.Store.get_team_run(run_id, team_name) do
+        nil ->
+          :ok
+
+        team_run ->
+          Cortex.Store.update_team_run(team_run, %{
+            status: "failed",
+            result_summary: "Error: #{inspect(reason)}",
+            completed_at: DateTime.utc_now()
+          })
+      end
+    end)
+
+    :ok
+  end
+
+  defp truncate_summary(nil), do: nil
+
+  defp truncate_summary(text) when is_binary(text) do
+    if String.length(text) > 2000 do
+      String.slice(text, 0, 2000) <> "..."
+    else
+      text
+    end
+  end
+
+  defp truncate_summary(other), do: inspect(other) |> truncate_summary()
+
+  @spec safe_store_call((-> any())) :: any()
+  defp safe_store_call(fun) do
+    try do
+      fun.()
+    rescue
+      _ -> :ok
+    end
   end
 
   @spec write_team_result(Workspace.t(), String.t(), TeamResult.t()) :: :ok | {:error, term()}

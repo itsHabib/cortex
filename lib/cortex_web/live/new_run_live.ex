@@ -281,9 +281,59 @@ defmodule CortexWeb.NewRunLive do
     e -> {:error, e}
   end
 
-  defp spawn_orchestration(_run, _config) do
-    # In Phase 5, we just create the Run record.
-    # Full orchestration integration will come in a later phase.
-    :ok
+  defp safe_update_run_status(run, status) do
+    # Re-fetch to avoid stale struct (runner may have updated it)
+    case Cortex.Store.get_run(run.id) do
+      nil ->
+        :ok
+
+      fresh_run ->
+        Cortex.Store.update_run(fresh_run, %{
+          status: status,
+          completed_at: DateTime.utc_now()
+        })
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp spawn_orchestration(run, _config) do
+    yaml = run.config_yaml
+    run_id = run.id
+
+    Task.start(fn ->
+      # Write YAML to a temp file for the runner
+      tmp_path = Path.join(System.tmp_dir!(), "cortex_run_#{run_id}.yaml")
+      File.write!(tmp_path, yaml)
+
+      try do
+        result =
+          Cortex.Orchestration.Runner.run(tmp_path,
+            workspace_path: System.tmp_dir!() |> Path.join("cortex_#{run_id}"),
+            run_id: run_id
+          )
+
+        case result do
+          {:ok, _summary} ->
+            # Runner already persists completed status to Store;
+            # this is a fallback in case that didn't happen
+            safe_update_run_status(run, "completed")
+
+          {:error, reason} ->
+            safe_update_run_status(run, "failed")
+
+            require Logger
+            Logger.error("Run #{run_id} failed: #{inspect(reason)}")
+        end
+      rescue
+        e ->
+          safe_update_run_status(run, "failed")
+
+          require Logger
+          Logger.error("Run #{run_id} crashed: #{inspect(e)}")
+      after
+        File.rm(tmp_path)
+      end
+    end)
   end
 end

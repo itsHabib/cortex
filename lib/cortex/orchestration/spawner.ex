@@ -257,13 +257,14 @@ defmodule Cortex.Orchestration.Spawner do
 
   defp build_team_result(team_name, session_id, result_map) do
     status = parse_status(Map.get(result_map, "subtype", "success"))
+    cost = Map.get(result_map, "total_cost_usd") || Map.get(result_map, "cost_usd")
 
     {:ok,
      %TeamResult{
        team: team_name,
        status: status,
        result: Map.get(result_map, "result"),
-       cost_usd: Map.get(result_map, "cost_usd"),
+       cost_usd: cost,
        num_turns: Map.get(result_map, "num_turns"),
        duration_ms: Map.get(result_map, "duration_ms"),
        session_id: session_id || Map.get(result_map, "session_id")

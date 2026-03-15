@@ -10,6 +10,16 @@ defmodule CortexWeb.Router do
     plug(:put_secure_browser_headers)
   end
 
+  pipeline :api do
+    plug(:accepts, ["json"])
+  end
+
+  scope "/api", CortexWeb do
+    pipe_through(:api)
+
+    resources("/runs", RunController, only: [:index, :create, :show])
+  end
+
   scope "/", CortexWeb do
     pipe_through(:browser)
 
