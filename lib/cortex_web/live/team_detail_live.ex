@@ -14,6 +14,8 @@ defmodule CortexWeb.TeamDetailLive do
     team_members = extract_members(run, team_name)
     log_lines = parse_log(team_run)
 
+    diagnostics = load_diagnostics(run, team_run)
+
     {:ok,
      assign(socket,
        run: run,
@@ -26,7 +28,8 @@ defmodule CortexWeb.TeamDetailLive do
        log_sort: :desc,
        expanded_logs: MapSet.new(),
        active_tab: "result",
-       page_title: "Team: #{team_name}"
+       page_title: "Team: #{team_name}",
+       diagnostics: diagnostics
      )}
   end
 
@@ -66,14 +69,77 @@ defmodule CortexWeb.TeamDetailLive do
     {:noreply, assign(socket, log_lines: sorted, expanded_logs: MapSet.new())}
   end
 
+  def handle_event("resume_team", _params, socket) do
+    run = socket.assigns.run
+    team_name = socket.assigns.team_name
+    workspace_path = run && run.workspace_path
+
+    if workspace_path do
+      run_id = run.id
+
+      Task.start(fn ->
+        log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+
+        session_id =
+          case Cortex.Orchestration.Spawner.extract_session_id_from_log(log_path) do
+            {:ok, sid} -> sid
+            :error -> nil
+          end
+
+        {status, reason} =
+          if session_id do
+            case Cortex.Orchestration.Spawner.resume(
+                   team_name: team_name,
+                   session_id: session_id,
+                   timeout_minutes: 30,
+                   log_path: log_path,
+                   command: "claude",
+                   cwd: workspace_path
+                 ) do
+              {:ok, %{status: :success}} -> {:success, "session resumed successfully"}
+              {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
+              {:error, reason} -> {:failure, inspect(reason)}
+            end
+          else
+            {:no_session_id, "no session_id found in logs"}
+          end
+
+        Cortex.Events.broadcast(:team_resume_result, %{
+          run_id: run_id,
+          team_name: team_name,
+          status: status,
+          reason: reason
+        })
+
+        Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+      end)
+
+      {:noreply, put_flash(socket, :info, "Resuming #{team_name}...")}
+    else
+      {:noreply, put_flash(socket, :error, "No workspace path — cannot resume")}
+    end
+  end
+
   @impl true
-  def handle_info(%{type: :team_completed, payload: _payload}, socket) do
+  def handle_info(%{type: type, payload: _payload}, socket)
+      when type in [:team_completed, :tier_completed, :run_completed, :run_resumed] do
     team_run = safe_get_team_run(socket.assigns.run_id, socket.assigns.team_name)
     log_lines = parse_log(team_run)
     sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
     run = safe_get_run(socket.assigns.run_id)
+    diagnostics = load_diagnostics(run, team_run)
 
-    {:noreply, assign(socket, team_run: team_run, log_lines: sorted, run: run)}
+    {:noreply,
+     assign(socket, team_run: team_run, log_lines: sorted, run: run, diagnostics: diagnostics)}
+  end
+
+  def handle_info(%{type: :team_resume_result, payload: payload}, socket) do
+    if payload.team_name == socket.assigns.team_name do
+      {:noreply,
+       put_flash(socket, :info, "Resume #{payload.status}: #{Map.get(payload, :reason, "")}")}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -97,6 +163,38 @@ defmodule CortexWeb.TeamDetailLive do
         <a href={"/runs/#{@run_id}"} class="text-sm text-gray-400 hover:text-white">Back to Run</a>
       </:actions>
     </.header>
+
+    <!-- Resume Banner (for stalled/running teams with a session to resume) -->
+    <%= if @team_run && (@team_run.status || "pending") == "running" && @diagnostics do %>
+      <div class={[
+        "rounded-lg border p-4 mb-6",
+        if(@diagnostics.has_result, do: "bg-gray-900 border-gray-800", else: "bg-yellow-900/30 border-yellow-800")
+      ]}>
+        <div class="flex items-center justify-between">
+          <div>
+            <p class={if(@diagnostics.has_result, do: "text-gray-300 font-medium", else: "text-yellow-300 font-medium")}>
+              {@diagnostics.diagnosis_detail}
+            </p>
+            <p :if={@diagnostics.session_id} class="text-sm text-gray-400 mt-1">
+              Session: <code class="font-mono text-cortex-400">{@diagnostics.session_id}</code>
+              <%= if @diagnostics.cost_usd do %>
+                | Cost: ${Float.round(@diagnostics.cost_usd * 1.0, 4)}
+              <% end %>
+              <%= if @diagnostics.total_input_tokens > 0 do %>
+                | Tokens: {format_token_count(@diagnostics.total_input_tokens)} in / {format_token_count(@diagnostics.total_output_tokens)} out
+              <% end %>
+            </p>
+          </div>
+          <button
+            :if={@diagnostics.session_id && not @diagnostics.has_result}
+            phx-click="resume_team"
+            class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
+          >
+            Resume {@team_name}
+          </button>
+        </div>
+      </div>
+    <% end %>
 
     <!-- Team Members -->
     <div :if={@team_members != []} class="mb-6 bg-gray-900 rounded-lg border border-gray-800 p-4">
@@ -389,4 +487,21 @@ defmodule CortexWeb.TeamDetailLive do
   end
 
   defp format_json_value(val), do: inspect(val)
+
+  # -- Diagnostics --
+
+  defp load_diagnostics(run, team_run) do
+    if run && run.workspace_path && team_run && team_run.log_path do
+      case Cortex.Orchestration.LogParser.parse(team_run.log_path) do
+        {:ok, report} -> report
+        {:error, _} -> nil
+      end
+    end
+  end
+
+  defp format_token_count(nil), do: "0"
+  defp format_token_count(0), do: "0"
+  defp format_token_count(n) when n >= 1_000_000, do: "#{Float.round(n / 1_000_000, 1)}M"
+  defp format_token_count(n) when n >= 1_000, do: "#{Float.round(n / 1_000, 1)}K"
+  defp format_token_count(n), do: to_string(n)
 end
