@@ -100,7 +100,7 @@ Currently, all gossip agents are defined in the YAML upfront and spawned simulta
 
 #### 2a. Coordinator as a Long-Running GenServer
 
-Currently `Cortex.Gossip.Coordinator` is a module with functions — not a GenServer. The `execute/2` function runs synchronously, blocking until all agents complete. To support dynamic join, the coordinator needs to become a GenServer that:
+Currently `Cortex.Gossip.SessionRunner` is a module with functions — not a GenServer. The `execute/2` function runs synchronously, blocking until all agents complete. To support dynamic join, the coordinator needs to become a GenServer that:
 
 - Holds cluster state (stores, config, topology, active agents)
 - Runs the exchange loop as a recurring `Process.send_after` (not a blocking `Enum.each` with `Process.sleep`)
@@ -111,7 +111,7 @@ Currently `Cortex.Gossip.Coordinator` is a module with functions — not a GenSe
 
 ```elixir
 # Add a new agent to a running cluster
-Cortex.Gossip.Coordinator.join(coordinator_pid, %{
+Cortex.Gossip.SessionRunner.join(coordinator_pid, %{
   name: "new-specialist",
   topic: "pricing strategy",
   prompt: "Research pricing models for fitness apps..."
@@ -146,7 +146,7 @@ The critical piece: when a new agent joins round 3 of 5, it needs to know what t
 
 ### Suggested Approach
 
-1. First: Refactor Coordinator to be a GenServer (2a) — this is the foundation
+1. First: Refactor SessionRunner to be a GenServer (2a) — this is the foundation
 2. Then: Add `join/2` with knowledge catch-up (2b + 2d)
 3. Then: Mix task + API endpoint (2c)
 4. Then: Wire into Gossip LiveView (button + mesh update)

@@ -8,8 +8,8 @@ defmodule CortexWeb.GossipLive do
 
   use CortexWeb, :live_view
 
-  alias Cortex.Gossip.Coordinator
   alias Cortex.Gossip.{Config, Entry, Topology}
+  alias Cortex.Gossip.SessionRunner
 
   @impl true
   def mount(_params, _session, socket) do
@@ -738,10 +738,7 @@ defmodule CortexWeb.GossipLive do
 
   defp build_svg_edges(topology, positions, selected, selected_peers) do
     topology
-    |> Enum.flat_map(fn {from, peers} ->
-      Enum.map(peers, fn to -> if from < to, do: {from, to}, else: {to, from} end)
-    end)
-    |> Enum.uniq()
+    |> unique_edge_pairs()
     |> Enum.map(fn {from, to} ->
       {fx, fy} = Map.get(positions, from, {0, 0})
       {tx, ty} = Map.get(positions, to, {0, 0})
@@ -753,6 +750,16 @@ defmodule CortexWeb.GossipLive do
 
       %{x1: fx, y1: fy, x2: tx, y2: ty, highlighted: highlighted}
     end)
+  end
+
+  defp unique_edge_pairs(topology) do
+    topology
+    |> Enum.flat_map(&normalize_peer_edges/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_peer_edges({from, peers}) do
+    Enum.map(peers, fn to -> if from < to, do: {from, to}, else: {to, from} end)
   end
 
   # -- Helpers --
@@ -795,7 +802,7 @@ defmodule CortexWeb.GossipLive do
 
       try do
         {:ok, _summary} =
-          Coordinator.run_config(config,
+          SessionRunner.run_config(config,
             workspace_path: workspace_path
           )
 

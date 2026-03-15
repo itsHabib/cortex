@@ -28,7 +28,7 @@ defmodule Mix.Tasks.Cortex.Run do
 
   use Mix.Task
 
-  alias Cortex.Gossip.Coordinator
+  alias Cortex.Gossip.SessionRunner
   alias Cortex.Orchestration.Runner
   alias Cortex.Orchestration.Summary
 
@@ -74,7 +74,7 @@ defmodule Mix.Tasks.Cortex.Run do
   defp run_gossip(config_path, opts) do
     Mix.shell().info("\n=> Cortex Gossip Engine\n")
 
-    case Coordinator.run(config_path, opts) do
+    case SessionRunner.run(config_path, opts) do
       {:ok, %{status: :dry_run} = plan} ->
         Mix.shell().info(format_gossip_dry_run(plan))
 

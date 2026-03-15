@@ -1,7 +1,7 @@
-defmodule Cortex.Gossip.CoordinatorTest do
+defmodule Cortex.Gossip.SessionRunnerTest do
   use ExUnit.Case, async: true
 
-  alias Cortex.Gossip.Coordinator
+  alias Cortex.Gossip.SessionRunner
   alias Cortex.Gossip.Config, as: GossipConfig
   alias Cortex.Gossip.Config.{Agent, GossipSettings, SeedKnowledge}
   alias Cortex.Orchestration.Config.Defaults
@@ -82,7 +82,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
 
       config_path = write_config_file(tmp_dir, yaml)
 
-      assert {:ok, plan} = Coordinator.run(config_path, dry_run: true)
+      assert {:ok, plan} = SessionRunner.run(config_path, dry_run: true)
 
       assert plan.status == :dry_run
       assert plan.mode == :gossip
@@ -138,7 +138,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
         )
 
       assert {:ok, summary} =
-               Coordinator.run_config(config,
+               SessionRunner.run_config(config,
                  workspace_path: tmp_dir,
                  command: dispatcher
                )
@@ -169,7 +169,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
         )
 
       assert {:ok, summary} =
-               Coordinator.run_config(config,
+               SessionRunner.run_config(config,
                  workspace_path: tmp_dir,
                  command: script
                )
@@ -194,7 +194,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
         )
 
       assert {:ok, summary} =
-               Coordinator.run_config(config,
+               SessionRunner.run_config(config,
                  workspace_path: tmp_dir,
                  command: failing_script
                )
@@ -217,7 +217,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
           interval: 1
         )
 
-      Coordinator.run_config(config, workspace_path: tmp_dir, command: script)
+      SessionRunner.run_config(config, workspace_path: tmp_dir, command: script)
 
       # Knowledge directory should exist
       assert File.dir?(Path.join([tmp_dir, ".cortex", "knowledge", "ws-agent"]))
@@ -248,7 +248,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
           ]
         )
 
-      Coordinator.run_config(config, workspace_path: tmp_dir, command: script)
+      SessionRunner.run_config(config, workspace_path: tmp_dir, command: script)
 
       seed_path = Path.join([tmp_dir, ".cortex", "knowledge", "seed-agent", "seed.json"])
       assert File.exists?(seed_path)
@@ -276,7 +276,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
         )
 
       assert {:ok, summary} =
-               Coordinator.run_config(config,
+               SessionRunner.run_config(config,
                  workspace_path: tmp_dir,
                  command: script
                )
@@ -315,7 +315,7 @@ defmodule Cortex.Gossip.CoordinatorTest do
       config_path = write_config_file(tmp_dir, yaml)
 
       assert {:ok, summary} =
-               Coordinator.run(config_path,
+               SessionRunner.run(config_path,
                  workspace_path: tmp_dir,
                  command: script
                )
@@ -333,12 +333,12 @@ defmodule Cortex.Gossip.CoordinatorTest do
 
       config_path = write_config_file(tmp_dir, yaml)
 
-      assert {:error, errors} = Coordinator.run(config_path)
+      assert {:error, errors} = SessionRunner.run(config_path)
       assert is_list(errors)
     end
 
     test "returns error for missing file" do
-      assert {:error, _} = Coordinator.run("/nonexistent/gossip.yaml")
+      assert {:error, _} = SessionRunner.run("/nonexistent/gossip.yaml")
     end
   end
 end

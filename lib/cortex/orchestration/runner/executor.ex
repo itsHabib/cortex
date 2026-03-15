@@ -13,6 +13,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
   produce empty tiers.
   """
 
+  alias Cortex.Coordinator.Config, as: CoordConfig
+  alias Cortex.Coordinator.Lifecycle, as: CoordLifecycle
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Messaging.OutboxWatcher
   alias Cortex.Orchestration.Config
@@ -29,10 +31,6 @@ defmodule Cortex.Orchestration.Runner.Executor do
   require Logger
 
   @default_task_timeout_ms :timer.minutes(60)
-
-  @coordinator_name "coordinator"
-  @coordinator_model "haiku"
-  @coordinator_max_turns 500
 
   # -- Public API -------------------------------------------------------------
 
@@ -81,8 +79,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
       watcher_names =
         if coordinator do
-          InboxBridge.setup(workspace_path, ["coordinator"])
-          team_names ++ ["coordinator"]
+          InboxBridge.setup(workspace_path, [CoordConfig.name()])
+          team_names ++ [CoordConfig.name()]
         else
           team_names
         end
@@ -99,7 +97,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
       coordinator_task =
         if coordinator do
-          spawn_coordinator(config, tiers, workspace, command, run_id)
+          CoordLifecycle.spawn(config, tiers, workspace, command, run_id, &broadcast/2)
         end
 
       run_start = System.monotonic_time(:millisecond)
@@ -107,7 +105,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
       result =
         run_tiers(tiers, config, workspace, command, continue_on_error, run_id)
 
-      stop_coordinator(coordinator_task)
+      CoordLifecycle.stop(coordinator_task)
 
       run_duration = System.monotonic_time(:millisecond) - run_start
 
@@ -167,26 +165,26 @@ defmodule Cortex.Orchestration.Runner.Executor do
       workspace = %Workspace{path: Path.join(workspace_path, ".cortex")}
       team_names = Enum.map(config.teams, & &1.name)
 
-      InboxBridge.setup(workspace_path, ["coordinator"])
+      InboxBridge.setup(workspace_path, [CoordConfig.name()])
 
       _watcher_pid =
         safe_start_watcher(
           workspace_path: workspace_path,
           run_id: run_id,
-          team_names: team_names ++ ["coordinator"]
+          team_names: team_names ++ [CoordConfig.name()]
         )
 
       broadcast(:run_started, %{project: config.name, teams: team_names})
       Tel.emit_run_started(%{project: config.name, teams: team_names})
 
-      coordinator_task = spawn_coordinator(config, all_tiers, workspace, command, run_id)
+      coordinator_task = CoordLifecycle.spawn(config, all_tiers, workspace, command, run_id, &broadcast/2)
 
       run_start = System.monotonic_time(:millisecond)
 
       result =
         run_tiers(filtered_tiers, config, workspace, command, continue_on_error, run_id)
 
-      stop_coordinator(coordinator_task)
+      CoordLifecycle.stop(coordinator_task)
 
       run_duration = System.monotonic_time(:millisecond) - run_start
 
@@ -451,71 +449,6 @@ defmodule Cortex.Orchestration.Runner.Executor do
       {:error, reason} ->
         {team_name, {:error, reason}, %{type: :error, reason: reason}}
     end
-  end
-
-  # -- Coordinator agent management -------------------------------------------
-
-  defp spawn_coordinator(config, tiers, workspace, command, run_id) do
-    prompt = Injection.build_coordinator_prompt(config, tiers, workspace.path)
-    log_path = Workspace.log_path(workspace, @coordinator_name)
-
-    on_token_update = fn name, tokens ->
-      broadcast(:team_tokens_updated, %{
-        run_id: run_id,
-        team_name: name,
-        input_tokens: tokens.input_tokens,
-        output_tokens: tokens.output_tokens,
-        cache_read_tokens: tokens.cache_read_tokens,
-        cache_creation_tokens: tokens.cache_creation_tokens
-      })
-    end
-
-    on_activity = fn name, activity ->
-      broadcast(:team_activity, %{
-        run_id: run_id,
-        team_name: name,
-        type: activity.type,
-        tools: Map.get(activity, :tools, []),
-        details: Map.get(activity, :details, []),
-        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-      })
-    end
-
-    spawner_opts = [
-      team_name: @coordinator_name,
-      prompt: prompt,
-      model: @coordinator_model,
-      max_turns: @coordinator_max_turns,
-      permission_mode: "bypassPermissions",
-      timeout_minutes: config.defaults.timeout_minutes * max(length(tiers), 1),
-      log_path: log_path,
-      command: command,
-      cwd: Path.dirname(workspace.path),
-      on_token_update: on_token_update,
-      on_activity: on_activity,
-      on_port_opened: fn _name, _pid -> :ok end
-    ]
-
-    Task.async(fn ->
-      Spawner.spawn(spawner_opts)
-    end)
-  rescue
-    e ->
-      Logger.warning("Failed to spawn coordinator agent: #{inspect(e)}")
-      nil
-  end
-
-  defp stop_coordinator(nil), do: :ok
-
-  defp stop_coordinator(task) do
-    case Task.yield(task, 5_000) do
-      {:ok, _result} -> :ok
-      nil -> Task.shutdown(task, :brutal_kill)
-    end
-
-    :ok
-  rescue
-    _ -> :ok
   end
 
   # -- Run ID resolution ------------------------------------------------------

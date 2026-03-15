@@ -1,6 +1,6 @@
-defmodule Cortex.Gossip.Coordinator do
+defmodule Cortex.Gossip.SessionRunner do
   @moduledoc """
-  Orchestrates a gossip exploration session with real `claude -p` agents.
+  Runs a gossip exploration session with real `claude -p` agents.
 
   The coordinator manages the full lifecycle:
 
