@@ -21,6 +21,9 @@ mix deps.get && mix ecto.create && mix ecto.migrate && mix test
 - Return {:ok, value} | {:error, reason} from fallible functions
 - Tests mirror lib/ structure, use async: true where safe
 
+## Important
+- Do NOT pipe `mix test` to `tail`, `grep`, or any other command — it hangs forever. Run it bare or with `; echo $?`.
+
 ## Commands
 ```bash
 mix test                           # run all tests

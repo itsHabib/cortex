@@ -38,6 +38,7 @@ defmodule CortexWeb.Router do
 
     live("/", DashboardLive, :index)
     live("/runs", RunListLive, :index)
+    live("/runs/compare", RunCompareLive, :index)
     live("/runs/:id", RunDetailLive, :show)
     live("/runs/:id/teams/:name", TeamDetailLive, :show)
     live("/workflows", NewRunLive, :index)

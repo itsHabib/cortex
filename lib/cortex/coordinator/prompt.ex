@@ -95,6 +95,26 @@ defmodule Cortex.Coordinator.Prompt do
     Read `state.json` for statuses and tokens. Check log files (`ls -la` the logs dir)
     to see which are growing (active) vs static (possibly stuck).
 
+    ## Summary Reports
+    At key milestones, write a summary report to `.cortex/summaries/`:
+    - After each tier completes (all teams in that tier are done)
+    - When the full run completes
+    - When a significant issue is detected (multiple failures, stalls)
+
+    Create the summaries directory first: `mkdir -p #{Path.join(workspace_path, "summaries")}`
+
+    File naming: `<ISO8601_compact>_<event>.md`
+    Example: `2026-03-15T230000_tier0_complete.md`
+
+    Each summary should include:
+    - What each team produced (read state.json for statuses and result summaries)
+    - Token usage per team (from state.json)
+    - Total cost so far
+    - Any issues detected (failures, stalls, rate limits)
+    - Recommendations for next tiers (if applicable)
+
+    Keep summaries concise (under 100 lines). They are displayed in the dashboard.
+
     ## Important
     - You are stateless — if restarted, re-read state files to catch up
     - Do NOT modify state.json or registry.json — those are owned by the orchestrator

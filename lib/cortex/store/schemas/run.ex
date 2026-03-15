@@ -21,6 +21,8 @@ defmodule Cortex.Store.Schemas.Run do
     field(:total_cost_usd, :float, default: 0.0)
     field(:total_input_tokens, :integer)
     field(:total_output_tokens, :integer)
+    field(:total_cache_read_tokens, :integer)
+    field(:total_cache_creation_tokens, :integer)
     field(:total_duration_ms, :integer)
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
@@ -33,7 +35,7 @@ defmodule Cortex.Store.Schemas.Run do
   end
 
   @required_fields ~w(name)a
-  @optional_fields ~w(config_yaml status team_count total_cost_usd total_input_tokens total_output_tokens total_duration_ms started_at completed_at workspace_path mode)a
+  @optional_fields ~w(config_yaml status team_count total_cost_usd total_input_tokens total_output_tokens total_cache_read_tokens total_cache_creation_tokens total_duration_ms started_at completed_at workspace_path mode)a
 
   def changeset(run, attrs) do
     run

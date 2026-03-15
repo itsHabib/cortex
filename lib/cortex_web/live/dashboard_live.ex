@@ -23,7 +23,7 @@ defmodule CortexWeb.DashboardLive do
 
   @impl true
   def handle_info(%{type: type, payload: _payload}, socket)
-      when type in [:run_started, :run_completed, :team_completed] do
+      when type in [:run_started, :run_completed, :team_completed, :team_started, :tier_completed] do
     runs = safe_list_runs(limit: 10)
 
     {total_input, total_output} = compute_total_tokens(runs)
@@ -48,6 +48,12 @@ defmodule CortexWeb.DashboardLive do
       Dashboard
       <:subtitle>Overview of orchestration runs and system status</:subtitle>
       <:actions>
+        <a
+          href="/runs/compare"
+          class="inline-flex items-center rounded-md bg-gray-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-600"
+        >
+          Compare Runs
+        </a>
         <a
           href="/workflows"
           class="inline-flex items-center rounded-md bg-cortex-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cortex-500"

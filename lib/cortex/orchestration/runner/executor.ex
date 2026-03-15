@@ -177,7 +177,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
       broadcast(:run_started, %{project: config.name, teams: team_names})
       Tel.emit_run_started(%{project: config.name, teams: team_names})
 
-      coordinator_task = CoordLifecycle.spawn(config, all_tiers, workspace, command, run_id, &broadcast/2)
+      coordinator_task =
+        CoordLifecycle.spawn(config, all_tiers, workspace, command, run_id, &broadcast/2)
 
       run_start = System.monotonic_time(:millisecond)
 
@@ -255,7 +256,13 @@ defmodule Cortex.Orchestration.Runner.Executor do
     team_states = Map.values(state.teams)
 
     total_cost = team_states |> Enum.map(fn ts -> ts.cost_usd || 0.0 end) |> Enum.sum()
-    total_input_tokens = team_states |> Enum.map(fn ts -> ts.input_tokens || 0 end) |> Enum.sum()
+
+    total_input_tokens =
+      team_states
+      |> Enum.map(fn ts ->
+        (ts.input_tokens || 0) + (ts.cache_read_tokens || 0) + (ts.cache_creation_tokens || 0)
+      end)
+      |> Enum.sum()
 
     total_output_tokens =
       team_states |> Enum.map(fn ts -> ts.output_tokens || 0 end) |> Enum.sum()
@@ -312,12 +319,30 @@ defmodule Cortex.Orchestration.Runner.Executor do
         # All teams in this tier already completed -- skip
         {:cont, acc}
       else
-        execute_tier(team_names, tier_index, config, workspace, command, continue_on_error, run_id, acc)
+        execute_tier(
+          team_names,
+          tier_index,
+          config,
+          workspace,
+          command,
+          continue_on_error,
+          run_id,
+          acc
+        )
       end
     end)
   end
 
-  defp execute_tier(team_names, tier_index, config, workspace, command, continue_on_error, run_id, acc) do
+  defp execute_tier(
+         team_names,
+         tier_index,
+         config,
+         workspace,
+         command,
+         continue_on_error,
+         run_id,
+         acc
+       ) do
     broadcast(:tier_started, %{tier: tier_index, teams: team_names})
 
     {:ok, state} = Workspace.read_state(workspace)
@@ -539,25 +564,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
       status: :complete
     })
 
-    RunnerStore.safe_call(fn ->
-      fresh = Cortex.Store.get_run(run_id)
-
-      if fresh do
-        all_team_runs = Cortex.Store.get_team_runs(run_id)
-        total_cost = all_team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
-        total_input = all_team_runs |> Enum.map(&(&1.input_tokens || 0)) |> Enum.sum()
-        total_output = all_team_runs |> Enum.map(&(&1.output_tokens || 0)) |> Enum.sum()
-
-        Cortex.Store.update_run(fresh, %{
-          status: "completed",
-          total_cost_usd: total_cost,
-          total_input_tokens: total_input,
-          total_output_tokens: total_output,
-          total_duration_ms: (fresh.total_duration_ms || 0) + run_duration,
-          completed_at: DateTime.utc_now()
-        })
-      end
-    end)
+    persist_continuation_totals(run_id, run_duration, "completed")
 
     {:ok, %{status: :continued, run_id: run_id, duration_ms: run_duration}}
   end
@@ -575,17 +582,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
       status: :failed
     })
 
-    RunnerStore.safe_call(fn ->
-      fresh = Cortex.Store.get_run(run_id)
-
-      if fresh do
-        Cortex.Store.update_run(fresh, %{
-          status: "failed",
-          total_duration_ms: (fresh.total_duration_ms || 0) + run_duration,
-          completed_at: DateTime.utc_now()
-        })
-      end
-    end)
+    persist_continuation_totals(run_id, run_duration, "failed")
 
     error
   end
@@ -672,6 +669,43 @@ defmodule Cortex.Orchestration.Runner.Executor do
     end)
   end
 
+  defp persist_continuation_totals(run_id, run_duration, status) do
+    RunnerStore.safe_call(fn ->
+      fresh = Cortex.Store.get_run(run_id)
+
+      if fresh do
+        all_team_runs = Cortex.Store.get_team_runs(run_id)
+        totals = aggregate_team_run_totals(all_team_runs)
+
+        Cortex.Store.update_run(fresh, %{
+          status: status,
+          total_cost_usd: totals.cost,
+          total_input_tokens: totals.input_tokens,
+          total_output_tokens: totals.output_tokens,
+          total_cache_read_tokens: totals.cache_read_tokens,
+          total_cache_creation_tokens: totals.cache_creation_tokens,
+          total_duration_ms: (fresh.total_duration_ms || 0) + run_duration,
+          completed_at: DateTime.utc_now()
+        })
+      end
+    end)
+  end
+
+  defp aggregate_team_run_totals(team_runs) do
+    %{
+      cost: team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum(),
+      input_tokens:
+        team_runs
+        |> Enum.map(fn tr ->
+          (tr.input_tokens || 0) + (tr.cache_read_tokens || 0) + (tr.cache_creation_tokens || 0)
+        end)
+        |> Enum.sum(),
+      output_tokens: team_runs |> Enum.map(&(&1.output_tokens || 0)) |> Enum.sum(),
+      cache_read_tokens: team_runs |> Enum.map(&(&1.cache_read_tokens || 0)) |> Enum.sum(),
+      cache_creation_tokens: team_runs |> Enum.map(&(&1.cache_creation_tokens || 0)) |> Enum.sum()
+    }
+  end
+
   defp persist_successful_run(nil, _workspace, _run_duration), do: :ok
 
   defp persist_successful_run(run_id, workspace, run_duration) do
@@ -691,6 +725,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
             total_cost_usd: totals.cost,
             total_input_tokens: totals.input_tokens,
             total_output_tokens: totals.output_tokens,
+            total_cache_read_tokens: totals.cache_read_tokens,
+            total_cache_creation_tokens: totals.cache_creation_tokens,
             total_duration_ms: run_duration,
             completed_at: DateTime.utc_now()
           })
@@ -719,8 +755,18 @@ defmodule Cortex.Orchestration.Runner.Executor do
   defp aggregate_team_totals(team_states) do
     %{
       cost: team_states |> Enum.map(fn ts -> ts.cost_usd || 0.0 end) |> Enum.sum(),
-      input_tokens: team_states |> Enum.map(fn ts -> ts.input_tokens || 0 end) |> Enum.sum(),
-      output_tokens: team_states |> Enum.map(fn ts -> ts.output_tokens || 0 end) |> Enum.sum()
+      input_tokens:
+        team_states
+        |> Enum.map(fn ts ->
+          (ts.input_tokens || 0) + (ts.cache_read_tokens || 0) +
+            (ts.cache_creation_tokens || 0)
+        end)
+        |> Enum.sum(),
+      output_tokens: team_states |> Enum.map(fn ts -> ts.output_tokens || 0 end) |> Enum.sum(),
+      cache_read_tokens:
+        team_states |> Enum.map(fn ts -> ts.cache_read_tokens || 0 end) |> Enum.sum(),
+      cache_creation_tokens:
+        team_states |> Enum.map(fn ts -> ts.cache_creation_tokens || 0 end) |> Enum.sum()
     }
   end
 

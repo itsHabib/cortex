@@ -45,6 +45,13 @@ defmodule CortexWeb.RunDetailLive do
            team_outbox: [],
            diagnostics_team: nil,
            diagnostics_report: nil,
+           coordinator_expanded: false,
+           coordinator_log: nil,
+           coordinator_inbox: [],
+           coordinator_outbox: [],
+           activity_team: nil,
+           coordinator_summaries: [],
+           selected_summary: nil,
            run_summary: nil,
            pid_status: %{}
          )}
@@ -83,6 +90,13 @@ defmodule CortexWeb.RunDetailLive do
            diagnostics_team: nil,
            diagnostics_report: nil,
            coordinator_alive: coordinator_alive,
+           coordinator_expanded: false,
+           coordinator_log: nil,
+           coordinator_inbox: [],
+           coordinator_outbox: [],
+           activity_team: nil,
+           coordinator_summaries: [],
+           selected_summary: nil,
            run_summary: nil,
            pid_status: %{}
          )}
@@ -124,13 +138,22 @@ defmodule CortexWeb.RunDetailLive do
             socket.assigns.run_summary
           end
 
+        summaries =
+          if type in [:tier_completed, :run_completed] do
+            read_coordinator_summaries(updated_run || run)
+          else
+            socket.assigns.coordinator_summaries
+          end
+
         {:noreply,
          assign(socket,
            run: updated_run || run,
            team_runs: team_runs,
+           team_names: Enum.map(team_runs, & &1.team_name),
            tiers: tiers,
            edges: edges,
            coordinator_alive: coordinator_alive,
+           coordinator_summaries: summaries,
            run_summary: run_summary
          )}
     end
@@ -148,7 +171,11 @@ defmodule CortexWeb.RunDetailLive do
       team_runs = update_team_tokens(socket.assigns.team_runs, team_name, payload)
 
       total_input =
-        team_runs |> Enum.map(& &1.input_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
+        team_runs
+        |> Enum.map(fn tr ->
+          (tr.input_tokens || 0) + (tr.cache_read_tokens || 0) + (tr.cache_creation_tokens || 0)
+        end)
+        |> Enum.sum()
 
       total_output =
         team_runs |> Enum.map(& &1.output_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
@@ -535,7 +562,13 @@ defmodule CortexWeb.RunDetailLive do
         socket =
           if socket.assigns.messages_team == to do
             {inbox, outbox} = read_team_messages(run, to)
-            assign(socket, activities: activities, msg_content: "", team_inbox: inbox, team_outbox: outbox)
+
+            assign(socket,
+              activities: activities,
+              msg_content: "",
+              team_inbox: inbox,
+              team_outbox: outbox
+            )
           else
             assign(socket, activities: activities, msg_content: "")
           end
@@ -702,6 +735,61 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, run_summary: summary)}
   end
 
+  # -- Event handlers: coordinator detail --
+
+  def handle_event("toggle_coordinator", _params, socket) do
+    if socket.assigns.coordinator_expanded do
+      {:noreply, assign(socket, coordinator_expanded: false)}
+    else
+      run = socket.assigns.run
+      log = read_coordinator_log(run)
+      {inbox, outbox} = read_team_messages(run, "coordinator")
+
+      {:noreply,
+       assign(socket,
+         coordinator_expanded: true,
+         coordinator_log: log,
+         coordinator_inbox: inbox,
+         coordinator_outbox: outbox
+       )}
+    end
+  end
+
+  def handle_event("refresh_coordinator", _params, socket) do
+    run = socket.assigns.run
+    log = read_coordinator_log(run)
+    {inbox, outbox} = read_team_messages(run, "coordinator")
+
+    {:noreply,
+     assign(socket,
+       coordinator_log: log,
+       coordinator_inbox: inbox,
+       coordinator_outbox: outbox
+     )}
+  end
+
+  # -- Event handlers: activity team filter --
+
+  def handle_event("select_activity_team", %{"team" => ""}, socket) do
+    {:noreply, assign(socket, activity_team: nil)}
+  end
+
+  def handle_event("select_activity_team", %{"team" => team_name}, socket) do
+    {:noreply, assign(socket, activity_team: team_name)}
+  end
+
+  # -- Event handlers: coordinator summaries --
+
+  def handle_event("refresh_summaries", _params, socket) do
+    summaries = read_coordinator_summaries(socket.assigns.run)
+    {:noreply, assign(socket, coordinator_summaries: summaries)}
+  end
+
+  def handle_event("select_summary", %{"file" => filename}, socket) do
+    selected = read_summary_file(socket.assigns.run, filename, nil)
+    {:noreply, assign(socket, selected_summary: selected)}
+  end
+
   def handle_event("form_update", params, socket) do
     {:noreply,
      assign(socket,
@@ -730,7 +818,7 @@ defmodule CortexWeb.RunDetailLive do
         <:subtitle>
           <.status_badge status={@run.status} />
           <span class="ml-2 text-gray-400">
-            <.token_display input={sum_team_field(@team_runs, :input_tokens)} output={sum_team_field(@team_runs, :output_tokens)} />
+            <.token_display input={sum_total_input(@team_runs)} output={sum_team_field(@team_runs, :output_tokens)} />
           </span>
           <span class="ml-2 text-gray-400">
             <.duration_display ms={@run.total_duration_ms} />
@@ -838,10 +926,14 @@ defmodule CortexWeb.RunDetailLive do
       <div :if={@current_tab == "overview"}>
         <!-- Coordinator + Status Summary -->
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-          <div class={[
-            "bg-gray-900 rounded-lg border p-3 text-center",
-            if(@coordinator_alive, do: "border-green-900", else: "border-gray-800")
-          ]}>
+          <div
+            phx-click="toggle_coordinator"
+            class={[
+              "bg-gray-900 rounded-lg border p-3 text-center cursor-pointer hover:bg-gray-800/50 transition-colors",
+              if(@coordinator_alive, do: "border-green-900", else: "border-gray-800"),
+              if(@coordinator_expanded, do: "ring-1 ring-cortex-500/30", else: "")
+            ]}
+          >
             <p class="text-xs text-gray-500 uppercase">Coordinator</p>
             <%= if @coordinator_alive do %>
               <p class="text-lg font-bold text-green-300">Alive</p>
@@ -855,6 +947,7 @@ defmodule CortexWeb.RunDetailLive do
                 Start
               </button>
             <% end %>
+            <p class="text-xs text-gray-600 mt-1">{if @coordinator_expanded, do: "click to collapse", else: "click to expand"}</p>
           </div>
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-3 text-center">
             <p class="text-xs text-gray-500 uppercase">Pending</p>
@@ -877,6 +970,97 @@ defmodule CortexWeb.RunDetailLive do
             <p class="text-lg font-bold text-red-300">{count_by_status(@team_runs, "failed")}</p>
           </div>
         </div>
+
+        <!-- Coordinator Detail (expanded) -->
+        <div :if={@coordinator_expanded} class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Coordinator Detail</h2>
+            <button
+              phx-click="refresh_coordinator"
+              class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <!-- Coordinator Log -->
+            <div>
+              <h3 class="text-xs font-medium text-gray-500 uppercase mb-2">
+                Log ({if @coordinator_log, do: length(@coordinator_log), else: 0} lines)
+              </h3>
+              <%= if @coordinator_log && @coordinator_log != [] do %>
+                <div class="max-h-[40vh] overflow-y-auto rounded bg-gray-950 p-3 space-y-0.5">
+                  <div :for={line <- Enum.take(@coordinator_log, -100)} class="text-xs font-mono text-gray-400">
+                    <span :if={line.type} class={["rounded px-1 py-0.5 mr-1 text-xs", log_type_class(line.type)]}>
+                      {line.type}
+                    </span>
+                    <span class="break-all">{truncate(line.raw, 200)}</span>
+                  </div>
+                </div>
+              <% else %>
+                <p class="text-gray-500 text-sm">No coordinator log found.</p>
+              <% end %>
+            </div>
+
+            <!-- Coordinator Messages -->
+            <div>
+              <h3 class="text-xs font-medium text-gray-500 uppercase mb-2">
+                Inbox ({length(@coordinator_inbox)}) / Outbox ({length(@coordinator_outbox)})
+              </h3>
+              <%= if @coordinator_inbox != [] or @coordinator_outbox != [] do %>
+                <div class="max-h-[40vh] overflow-y-auto space-y-2">
+                  <div :for={msg <- @coordinator_inbox} class="bg-gray-950 rounded p-2 text-xs">
+                    <span class="text-cortex-400">from: {Map.get(msg, "from", "?")}</span>
+                    <span class="text-gray-600 ml-2">{Map.get(msg, "timestamp", "")}</span>
+                    <p class="text-gray-300 mt-1">{truncate(Map.get(msg, "content", ""), 200)}</p>
+                  </div>
+                  <div :for={msg <- @coordinator_outbox} class="bg-gray-950 rounded p-2 text-xs border-l-2 border-green-800">
+                    <span class="text-green-400">to: {Map.get(msg, "to", "?")}</span>
+                    <span class="text-gray-600 ml-2">{Map.get(msg, "timestamp", "")}</span>
+                    <p class="text-gray-300 mt-1">{truncate(Map.get(msg, "content", ""), 200)}</p>
+                  </div>
+                </div>
+              <% else %>
+                <p class="text-gray-500 text-sm">No messages yet.</p>
+              <% end %>
+            </div>
+          </div>
+        </div>
+
+        <!-- Coordinator Summaries -->
+        <%= if @coordinator_summaries != [] do %>
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Coordinator Summaries</h2>
+              <button
+                phx-click="refresh_summaries"
+                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
+              >
+                Refresh
+              </button>
+            </div>
+            <div class="flex flex-wrap gap-2 mb-3">
+              <button
+                :for={file <- @coordinator_summaries}
+                phx-click="select_summary"
+                phx-value-file={file}
+                class={[
+                  "text-xs px-2 py-1 rounded border transition-colors",
+                  if(@selected_summary && @selected_summary.name == file,
+                    do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
+                    else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
+                  )
+                ]}
+              >
+                {file}
+              </button>
+            </div>
+            <div :if={@selected_summary} class="bg-gray-950 rounded p-3">
+              <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_summary.content}</pre>
+            </div>
+          </div>
+        <% end %>
 
         <!-- On-demand Run Summary -->
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
@@ -941,7 +1125,7 @@ defmodule CortexWeb.RunDetailLive do
               <% end %>
               <div class="flex items-center gap-4 text-sm">
                 <span class="text-gray-500">Tier {team.tier || 0}</span>
-                <.token_display input={team.input_tokens} output={team.output_tokens} />
+                <.token_display input={total_input(team)} output={team.output_tokens} />
                 <.duration_display ms={team.duration_ms} />
               </div>
             </a>
@@ -952,15 +1136,28 @@ defmodule CortexWeb.RunDetailLive do
       <!-- ============ Activity Tab ============ -->
       <div :if={@current_tab == "activity"}>
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-          <div class="flex items-center justify-between mb-3">
+          <!-- Team Filter -->
+          <div class="flex items-center gap-3 mb-3">
             <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Activity Feed</h2>
-            <span class="text-xs text-gray-600">{length(@activities)} events</span>
+            <form phx-change="select_activity_team" class="flex-1 max-w-xs">
+              <select
+                name="team"
+                class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+              >
+                <option value="">All teams</option>
+                <option :for={name <- @team_names} value={name} selected={name == @activity_team}>
+                  {name}
+                </option>
+              </select>
+            </form>
+            <span class="text-xs text-gray-600 ml-auto">{length(filtered_activities(@activities, @activity_team))} events</span>
           </div>
-          <%= if @activities == [] do %>
+          <% visible = filtered_activities(@activities, @activity_team) %>
+          <%= if visible == [] do %>
             <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time and clear on page reload.</p>
           <% else %>
             <div class="space-y-1 min-h-[60vh] max-h-[80vh] overflow-y-auto" id="activity-feed">
-              <div :for={entry <- @activities} class="flex items-start gap-2 text-sm py-1">
+              <div :for={entry <- visible} class="flex items-start gap-2 text-sm py-1">
                 <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
                 <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
                 <span class="text-cortex-400 font-medium shrink-0">{entry.team}:</span>
@@ -1098,6 +1295,7 @@ defmodule CortexWeb.RunDetailLive do
                 >
                   <option value="">Select team...</option>
                   <option value="__all__" selected={@selected_log_team == "__all__"}>All teams</option>
+                  <option value="coordinator" selected={@selected_log_team == "coordinator"}>coordinator</option>
                   <option :for={name <- @team_names} value={name} selected={name == @selected_log_team}>
                     {name}
                   </option>
@@ -1402,7 +1600,9 @@ defmodule CortexWeb.RunDetailLive do
   defp mark_team_run_running(team_run_id, prompt) do
     safe_store_call(fn ->
       case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
-        nil -> :ok
+        nil ->
+          :ok
+
         tr ->
           Cortex.Store.update_team_run(tr, %{
             status: "running",
@@ -1905,9 +2105,16 @@ defmodule CortexWeb.RunDetailLive do
          {:ok, raw} <- YamlElixir.read_from_string(yaml) do
       config_names = raw |> Map.get("teams", []) |> MapSet.new(&Map.get(&1, "name", ""))
       existing_names = MapSet.new(team_runs, & &1.team_name)
-      completed = team_runs |> Enum.filter(&(&1.status in ["completed", "done"])) |> MapSet.new(& &1.team_name)
 
-      config_names |> MapSet.difference(existing_names) |> MapSet.difference(completed) |> MapSet.to_list()
+      completed =
+        team_runs
+        |> Enum.filter(&(&1.status in ["completed", "done"]))
+        |> MapSet.new(& &1.team_name)
+
+      config_names
+      |> MapSet.difference(existing_names)
+      |> MapSet.difference(completed)
+      |> MapSet.to_list()
     else
       _ -> []
     end
@@ -1941,6 +2148,39 @@ defmodule CortexWeb.RunDetailLive do
     if run && run.workspace_path do
       log_path = Path.join([run.workspace_path, ".cortex", "logs", "#{team_name}.log"])
       parse_log_file(log_path)
+    end
+  end
+
+  defp read_coordinator_log(run) do
+    read_team_log(run, "coordinator")
+  end
+
+  defp read_summary_file(_run, nil, fallback), do: fallback
+
+  defp read_summary_file(run, filename, fallback) do
+    path = Path.join([run.workspace_path, ".cortex", "summaries", filename])
+
+    case File.read(path) do
+      {:ok, data} -> %{name: filename, content: data}
+      _ -> fallback
+    end
+  end
+
+  defp read_coordinator_summaries(run) do
+    if run && run.workspace_path do
+      dir = Path.join([run.workspace_path, ".cortex", "summaries"])
+
+      case File.ls(dir) do
+        {:ok, files} ->
+          files
+          |> Enum.filter(&String.ends_with?(&1, ".md"))
+          |> Enum.sort(:desc)
+
+        _ ->
+          []
+      end
+    else
+      []
     end
   end
 
@@ -2057,8 +2297,18 @@ defmodule CortexWeb.RunDetailLive do
     team_runs |> Enum.map(&(Map.get(&1, field) || 0)) |> Enum.sum()
   end
 
+  defp sum_total_input(team_runs) do
+    team_runs |> Enum.map(&total_input/1) |> Enum.sum()
+  end
+
   defp prepend_activity(activities, entry) do
     [entry | activities] |> Enum.take(@max_activities)
+  end
+
+  defp filtered_activities(activities, nil), do: activities
+
+  defp filtered_activities(activities, team_name) do
+    Enum.filter(activities, fn entry -> entry.team == team_name end)
   end
 
   defp format_now do
@@ -2125,7 +2375,7 @@ defmodule CortexWeb.RunDetailLive do
         "--"
       end
 
-    total_input = sum_team_tokens(team_runs, :input_tokens)
+    total_input = Enum.map(team_runs, &total_input/1) |> Enum.sum()
     total_output = sum_team_tokens(team_runs, :output_tokens)
     total_cost = team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
 
@@ -2162,7 +2412,7 @@ defmodule CortexWeb.RunDetailLive do
 
   defp format_team_token_summary(tr) do
     if tr.input_tokens || tr.output_tokens do
-      " | #{format_token_count(tr.input_tokens || 0)} in / #{format_token_count(tr.output_tokens || 0)} out"
+      " | #{format_token_count(total_input(tr))} in / #{format_token_count(tr.output_tokens || 0)} out"
     else
       ""
     end
@@ -2249,8 +2499,12 @@ defmodule CortexWeb.RunDetailLive do
   defp handle_reconcile_result(socket, run, {:ok, changes}) when changes != [] do
     entries =
       Enum.map(changes, fn change ->
-        %{team: change.team, text: "#{change.from} -> #{change.to}: #{change.detail}",
-          kind: :resume, at: format_now()}
+        %{
+          team: change.team,
+          text: "#{change.from} -> #{change.to}: #{change.detail}",
+          kind: :resume,
+          at: format_now()
+        }
       end)
 
     activities = Enum.reduce(entries, socket.assigns.activities, &prepend_activity(&2, &1))
@@ -2301,7 +2555,14 @@ defmodule CortexWeb.RunDetailLive do
   defp update_team_tokens(team_runs, team_name, payload) do
     Enum.map(team_runs, fn tr ->
       if tr.team_name == team_name do
-        %{tr | input_tokens: payload.input_tokens, output_tokens: payload.output_tokens}
+        %{
+          tr
+          | input_tokens: payload.input_tokens,
+            output_tokens: payload.output_tokens,
+            cache_read_tokens: Map.get(payload, :cache_read_tokens, tr.cache_read_tokens),
+            cache_creation_tokens:
+              Map.get(payload, :cache_creation_tokens, tr.cache_creation_tokens)
+        }
       else
         tr
       end
@@ -2480,5 +2741,11 @@ defmodule CortexWeb.RunDetailLive do
       seconds < 3600 -> "#{div(seconds, 60)}m ago"
       true -> "#{div(seconds, 3600)}h #{rem(div(seconds, 60), 60)}m ago"
     end
+  end
+
+  # Total input tokens including cache (the actual API consumption)
+  defp total_input(team_run) do
+    (team_run.input_tokens || 0) + (team_run.cache_read_tokens || 0) +
+      (team_run.cache_creation_tokens || 0)
   end
 end
