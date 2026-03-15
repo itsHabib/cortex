@@ -165,6 +165,7 @@ defmodule CortexWeb.DAGComponents do
   defp node_fill("completed"), do: "#064e3b"
   defp node_fill("done"), do: "#064e3b"
   defp node_fill("failed"), do: "#7f1d1d"
+  defp node_fill("stalled"), do: "#78350f"
   defp node_fill(_), do: "#374151"
 
   defp node_stroke("pending"), do: "#6b7280"
@@ -172,6 +173,7 @@ defmodule CortexWeb.DAGComponents do
   defp node_stroke("completed"), do: "#10b981"
   defp node_stroke("done"), do: "#10b981"
   defp node_stroke("failed"), do: "#ef4444"
+  defp node_stroke("stalled"), do: "#f59e0b"
   defp node_stroke(_), do: "#6b7280"
 
   defp status_text_color("pending"), do: "#9ca3af"
@@ -179,6 +181,7 @@ defmodule CortexWeb.DAGComponents do
   defp status_text_color("completed"), do: "#6ee7b7"
   defp status_text_color("done"), do: "#6ee7b7"
   defp status_text_color("failed"), do: "#fca5a5"
+  defp status_text_color("stalled"), do: "#fcd34d"
   defp status_text_color(_), do: "#9ca3af"
 
   defp status_label(status), do: status

@@ -120,6 +120,7 @@ defmodule CortexWeb.CoreComponents do
 
   defp status_color("done"), do: "bg-emerald-900/60 text-emerald-300 ring-1 ring-emerald-500/30"
   defp status_color("failed"), do: "bg-rose-900/60 text-rose-300 ring-1 ring-rose-500/30"
+  defp status_color("stalled"), do: "bg-yellow-900/60 text-yellow-300 ring-1 ring-yellow-500/30"
   defp status_color(_), do: "bg-gray-700 text-gray-300"
 
   @doc """

@@ -304,15 +304,23 @@ defmodule CortexWeb.RunDetailLive do
       <% end %>
 
       <!-- Status Summary -->
+      <% stalled = has_dead_teams?(@team_runs, @run.status) %>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-3 text-center">
           <p class="text-xs text-gray-500 uppercase">Pending</p>
           <p class="text-lg font-bold text-gray-400">{count_by_status(@team_runs, "pending")}</p>
         </div>
-        <div class="bg-gray-900 rounded-lg border border-blue-900 p-3 text-center">
-          <p class="text-xs text-blue-400 uppercase">Running</p>
-          <p class="text-lg font-bold text-blue-300">{count_by_status(@team_runs, "running")}</p>
-        </div>
+        <%= if stalled do %>
+          <div class="bg-gray-900 rounded-lg border border-yellow-900 p-3 text-center">
+            <p class="text-xs text-yellow-400 uppercase">Stalled</p>
+            <p class="text-lg font-bold text-yellow-300">{count_by_status(@team_runs, "running")}</p>
+          </div>
+        <% else %>
+          <div class="bg-gray-900 rounded-lg border border-blue-900 p-3 text-center">
+            <p class="text-xs text-blue-400 uppercase">Running</p>
+            <p class="text-lg font-bold text-blue-300">{count_by_status(@team_runs, "running")}</p>
+          </div>
+        <% end %>
         <div class="bg-gray-900 rounded-lg border border-green-900 p-3 text-center">
           <p class="text-xs text-green-400 uppercase">Done</p>
           <p class="text-lg font-bold text-green-300">{count_by_status(@team_runs, ["completed", "done"])}</p>
@@ -351,7 +359,7 @@ defmodule CortexWeb.RunDetailLive do
           >
             <div class="flex items-center justify-between mb-2">
               <h3 class="font-medium text-white">{team.team_name}</h3>
-              <.status_badge status={team.status || "pending"} />
+              <.status_badge status={display_status(team, @team_runs, @run.status)} />
             </div>
             <p :if={team.role} class="text-sm text-gray-400 mb-2">{team.role}</p>
             <%= if members = Map.get(@team_members, team.team_name, []) do %>
@@ -552,6 +560,17 @@ defmodule CortexWeb.RunDetailLive do
     # and there are teams stuck in "running" state
     run_status in ["running", "failed"] and
       Enum.any?(team_runs, fn tr -> (tr.status || "pending") == "running" end)
+  end
+
+  # Override "running" → "stalled" for display when the banner is showing
+  defp display_status(team, team_runs, run_status) do
+    raw = team.status || "pending"
+
+    if raw == "running" and has_dead_teams?(team_runs, run_status) do
+      "stalled"
+    else
+      raw
+    end
   end
 
   defp count_by_status(team_runs, statuses) when is_list(statuses) do
