@@ -389,7 +389,8 @@ defmodule Cortex.Orchestration.Runner do
       permission_mode: permission_mode,
       timeout_minutes: timeout_minutes,
       log_path: log_path,
-      command: command
+      command: command,
+      cwd: workspace.path
     ]
 
     case Spawner.spawn(spawner_opts) do

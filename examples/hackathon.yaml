@@ -1,0 +1,822 @@
+name: "Cortex Blitz"
+workspace_path: /tmp/cortex-blitz
+
+defaults:
+  model: sonnet
+  max_turns: 200
+  permission_mode: bypassPermissions
+  timeout_minutes: 120
+
+teams:
+  # ============================================================
+  # TIER 0 — IDEATION (all 4 teams run in parallel)
+  # Each team designs a DSL that compiles to orchestra.yaml
+  # ============================================================
+
+  - name: phoenix-ideation
+    lead:
+      role: "Language Designer — drives syntax design, evaluates tradeoffs, writes the final language spec"
+    members:
+      - role: "PL Research Analyst"
+        focus: "Research Haskell, ML, and functional language patterns relevant to the DSL. Document findings in research-notes.md"
+      - role: "Compiler Architect"
+        focus: "Design the compilation pipeline — lexer, parser, AST, codegen. Plan the implementation architecture."
+      - role: "Spec Writer"
+        focus: "Write the full language proposal with syntax examples, grammar sketches, and compilation strategy. Own proposal.md"
+    context: |
+      You are Team Phoenix in the Cortex Blitz Hackathon. Your mission is to DESIGN a domain-specific language (DSL) for defining multi-agent orchestration workflows.
+
+      THE CHALLENGE:
+      Cortex is an Elixir/OTP multi-agent orchestration system that currently uses YAML config files (orchestra.yaml) to define projects. These YAML files are verbose, repetitive, and error-prone. Your job is to design a better language that compiles DOWN to orchestra.yaml.
+
+      Your DSL must be able to express:
+      - Project name and defaults (model, max_turns, timeout, permissions)
+      - Teams with leads, members, tasks, dependencies, and context
+      - DAG structure via dependency declarations (teams depend on other teams)
+      - Task definitions with summaries, details, deliverables, and verify commands
+
+      TARGET OUTPUT FORMAT (orchestra.yaml schema):
+      ```yaml
+      name: "project-name"
+      defaults:
+        model: sonnet          # LLM model
+        max_turns: 200         # max conversation turns
+        permission_mode: bypassPermissions
+        timeout_minutes: 120
+      teams:
+        - name: team-name
+          lead:
+            role: "Role description"
+            model: opus          # optional model override
+          members:
+            - role: "Member role"
+              focus: "What this member focuses on"
+          depends_on:
+            - other-team-name    # creates DAG edges
+          context: |
+            Free-form text injected into the team's prompt.
+            Can reference upstream team outputs.
+          tasks:
+            - summary: "Short task description"
+              details: "Detailed instructions"
+              deliverables:
+                - "path/to/output/file.md"
+              verify: "shell command to verify completion"
+      ```
+
+      EXAMPLE — a simple 3-tier DAG in orchestra.yaml:
+      ```yaml
+      name: "calculator"
+      defaults:
+        model: haiku
+        max_turns: 20
+      teams:
+        - name: requirements
+          lead: { role: "Requirements Analyst" }
+          tasks:
+            - summary: "Gather requirements"
+              deliverables: ["requirements.md"]
+        - name: architecture
+          lead: { role: "Software Architect" }
+          depends_on: [requirements]
+          tasks:
+            - summary: "Design architecture"
+              deliverables: ["architecture.md"]
+        - name: implementation
+          lead: { role: "Developer" }
+          depends_on: [architecture]
+          tasks:
+            - summary: "Build it"
+              deliverables: ["main.go"]
+      ```
+
+      YOUR DSL should express that same thing in a fraction of the lines, with better ergonomics.
+
+      HACKATHON RULES:
+      - You must produce a proposal at: hackathon/proposals/phoenix/proposal.md
+      - The proposal must include: language name, design philosophy, syntax examples showing how it expresses the orchestra.yaml schema, grammar sketch, compilation strategy, and tech stack for the compiler.
+      - Show how your DSL expresses BOTH a simple 3-team pipeline AND a complex 10+ team hackathon DAG.
+      - You are COMPETING against 3 other teams. Each team has a different language design philosophy.
+      - Be creative and ambitious but realistic — your build team has ~45 minutes to implement a working compiler.
+
+      TEAM PHOENIX IDENTITY — Haskell/ML-inspired. Your language should feel functional: algebraic data types, pattern matching, composition via pipelines, type inference. Think about how Haskell's type system could catch orchestration errors at compile time. Your differentiator is SAFETY and COMPOSITION — if it compiles, the DAG is valid.
+
+      OUTPUT DIRECTORY: hackathon/proposals/phoenix/
+      Create the directory if it doesn't exist. Primary deliverable: proposal.md
+    tasks:
+      - summary: "Research functional PL patterns for DSL design"
+        details: "Study how Haskell, ML, Dhall, and Nix handle typed configurations and pipeline composition. Identify patterns useful for orchestration DAGs — ADTs for team/task types, do-notation for sequencing, type classes for validation. Document in research-notes.md."
+        deliverables:
+          - "hackathon/proposals/phoenix/research-notes.md"
+        verify: "test -f hackathon/proposals/phoenix/research-notes.md"
+      - summary: "Design language syntax with multiple examples"
+        details: "Design the core syntax. Show how it expresses: a simple 3-team pipeline, a parallel fan-out/fan-in DAG, a 10-team hackathon with ideation→review→build→judging phases, and team templates/reuse. Include at least 4 syntax examples."
+        deliverables:
+          - "hackathon/proposals/phoenix/syntax-examples.md"
+        verify: "test -f hackathon/proposals/phoenix/syntax-examples.md"
+      - summary: "Sketch grammar and compilation pipeline"
+        details: "Write a rough grammar (BNF or PEG). Design the compilation pipeline: source → tokens → AST → validated AST → orchestra.yaml. Identify the trickiest parts and how you'll handle them."
+        deliverables:
+          - "hackathon/proposals/phoenix/grammar.md"
+        verify: "test -f hackathon/proposals/phoenix/grammar.md"
+      - summary: "Write the final proposal"
+        details: "Synthesize research, syntax design, and grammar into a polished proposal.md. Must include: language name, design philosophy, syntax examples for simple and complex DAGs, grammar sketch, compilation strategy, tech stack, and build plan. Show the SAME orchestra.yaml expressed in your DSL vs raw YAML to demonstrate the improvement."
+        deliverables:
+          - "hackathon/proposals/phoenix/proposal.md"
+        verify: "test -f hackathon/proposals/phoenix/proposal.md && wc -l hackathon/proposals/phoenix/proposal.md | awk '{if ($1 >= 30) exit 0; else exit 1}'"
+
+  - name: hydra-ideation
+    lead:
+      role: "Language Designer — drives syntax design, evaluates tradeoffs, writes the final language spec"
+    members:
+      - role: "PL Research Analyst"
+        focus: "Research graph-native languages, dataflow programming, and pipeline DSLs. Document findings in research-notes.md"
+      - role: "Compiler Architect"
+        focus: "Design the compilation pipeline — lexer, parser, AST, codegen. Plan the implementation architecture."
+      - role: "Spec Writer"
+        focus: "Write the full language proposal with syntax examples, grammar sketches, and compilation strategy. Own proposal.md"
+    context: |
+      You are Team Hydra in the Cortex Blitz Hackathon. Your mission is to DESIGN a domain-specific language (DSL) for defining multi-agent orchestration workflows.
+
+      THE CHALLENGE:
+      Cortex is an Elixir/OTP multi-agent orchestration system that currently uses YAML config files (orchestra.yaml) to define projects. These YAML files are verbose, repetitive, and error-prone. Your job is to design a better language that compiles DOWN to orchestra.yaml.
+
+      Your DSL must be able to express:
+      - Project name and defaults (model, max_turns, timeout, permissions)
+      - Teams with leads, members, tasks, dependencies, and context
+      - DAG structure via dependency declarations (teams depend on other teams)
+      - Task definitions with summaries, details, deliverables, and verify commands
+
+      TARGET OUTPUT FORMAT (orchestra.yaml schema):
+      ```yaml
+      name: "project-name"
+      defaults:
+        model: sonnet
+        max_turns: 200
+        permission_mode: bypassPermissions
+        timeout_minutes: 120
+      teams:
+        - name: team-name
+          lead:
+            role: "Role description"
+            model: opus
+          members:
+            - role: "Member role"
+              focus: "What this member focuses on"
+          depends_on:
+            - other-team-name
+          context: |
+            Free-form text injected into the team's prompt.
+          tasks:
+            - summary: "Short task description"
+              details: "Detailed instructions"
+              deliverables:
+                - "path/to/output/file.md"
+              verify: "shell command to verify completion"
+      ```
+
+      EXAMPLE — a simple 3-tier DAG:
+      ```yaml
+      name: "calculator"
+      defaults:
+        model: haiku
+        max_turns: 20
+      teams:
+        - name: requirements
+          lead: { role: "Requirements Analyst" }
+          tasks:
+            - summary: "Gather requirements"
+              deliverables: ["requirements.md"]
+        - name: architecture
+          lead: { role: "Software Architect" }
+          depends_on: [requirements]
+          tasks:
+            - summary: "Design architecture"
+              deliverables: ["architecture.md"]
+        - name: implementation
+          lead: { role: "Developer" }
+          depends_on: [architecture]
+          tasks:
+            - summary: "Build it"
+              deliverables: ["main.go"]
+      ```
+
+      HACKATHON RULES:
+      - You must produce a proposal at: hackathon/proposals/hydra/proposal.md
+      - The proposal must include: language name, design philosophy, syntax examples, grammar sketch, compilation strategy, and tech stack.
+      - Show how your DSL expresses BOTH a simple 3-team pipeline AND a complex 10+ team hackathon DAG.
+      - You are COMPETING against 3 other teams. Each team has a different design philosophy.
+      - Be creative and ambitious but realistic — your build team has ~45 minutes to implement a working compiler.
+
+      TEAM HYDRA IDENTITY — Graph-native and pipeline-oriented. Your language should make DAGs and dataflow VISUAL in the syntax itself. Think about how Unix pipes, Elixir's |> operator, and graph query languages (Cypher, Gremlin) express connections. Nodes and edges should be first-class. Your differentiator is EXPRESSIVENESS — the DAG structure should be obvious from reading the code.
+
+      OUTPUT DIRECTORY: hackathon/proposals/hydra/
+      Create the directory if it doesn't exist. Primary deliverable: proposal.md
+    tasks:
+      - summary: "Research graph and pipeline language patterns"
+        details: "Study graph query languages (Cypher, Gremlin), dataflow languages (Lucid, LabVIEW textual), pipeline DSLs (CUE, Jsonnet, Tekton), and Unix pipe composition. Identify patterns for making DAG structure visible in syntax. Document in research-notes.md."
+        deliverables:
+          - "hackathon/proposals/hydra/research-notes.md"
+        verify: "test -f hackathon/proposals/hydra/research-notes.md"
+      - summary: "Design language syntax with multiple examples"
+        details: "Design the core syntax. Show how it expresses: a simple 3-team pipeline, a parallel fan-out/fan-in DAG, a 10-team hackathon with ideation→review→build→judging phases, and team templates/reuse. Include at least 4 syntax examples. The DAG should be VISIBLE in the syntax."
+        deliverables:
+          - "hackathon/proposals/hydra/syntax-examples.md"
+        verify: "test -f hackathon/proposals/hydra/syntax-examples.md"
+      - summary: "Sketch grammar and compilation pipeline"
+        details: "Write a rough grammar (BNF or PEG). Design the compilation pipeline: source → tokens → AST → validated graph → orchestra.yaml. Focus on how you validate DAG properties (no cycles, valid edges) at compile time."
+        deliverables:
+          - "hackathon/proposals/hydra/grammar.md"
+        verify: "test -f hackathon/proposals/hydra/grammar.md"
+      - summary: "Write the final proposal"
+        details: "Synthesize research, syntax design, and grammar into a polished proposal.md. Must include: language name, design philosophy, syntax examples for simple and complex DAGs, grammar sketch, compilation strategy, tech stack, and build plan. Show the SAME orchestra.yaml expressed in your DSL vs raw YAML."
+        deliverables:
+          - "hackathon/proposals/hydra/proposal.md"
+        verify: "test -f hackathon/proposals/hydra/proposal.md && wc -l hackathon/proposals/hydra/proposal.md | awk '{if ($1 >= 30) exit 0; else exit 1}'"
+
+  - name: titan-ideation
+    lead:
+      role: "Language Designer — drives syntax design, evaluates tradeoffs, writes the final language spec"
+    members:
+      - role: "PL Research Analyst"
+        focus: "Research Nix, Dhall, CUE, and typed configuration languages. Document findings in research-notes.md"
+      - role: "Compiler Architect"
+        focus: "Design the compilation pipeline — lexer, parser, AST, codegen. Plan the implementation architecture."
+      - role: "Spec Writer"
+        focus: "Write the full language proposal with syntax examples, grammar sketches, and compilation strategy. Own proposal.md"
+    context: |
+      You are Team Titan in the Cortex Blitz Hackathon. Your mission is to DESIGN a domain-specific language (DSL) for defining multi-agent orchestration workflows.
+
+      THE CHALLENGE:
+      Cortex is an Elixir/OTP multi-agent orchestration system that currently uses YAML config files (orchestra.yaml) to define projects. These YAML files are verbose, repetitive, and error-prone. Your job is to design a better language that compiles DOWN to orchestra.yaml.
+
+      Your DSL must be able to express:
+      - Project name and defaults (model, max_turns, timeout, permissions)
+      - Teams with leads, members, tasks, dependencies, and context
+      - DAG structure via dependency declarations (teams depend on other teams)
+      - Task definitions with summaries, details, deliverables, and verify commands
+
+      TARGET OUTPUT FORMAT (orchestra.yaml schema):
+      ```yaml
+      name: "project-name"
+      defaults:
+        model: sonnet
+        max_turns: 200
+        permission_mode: bypassPermissions
+        timeout_minutes: 120
+      teams:
+        - name: team-name
+          lead:
+            role: "Role description"
+            model: opus
+          members:
+            - role: "Member role"
+              focus: "What this member focuses on"
+          depends_on:
+            - other-team-name
+          context: |
+            Free-form text injected into the team's prompt.
+          tasks:
+            - summary: "Short task description"
+              details: "Detailed instructions"
+              deliverables:
+                - "path/to/output/file.md"
+              verify: "shell command to verify completion"
+      ```
+
+      EXAMPLE — a simple 3-tier DAG:
+      ```yaml
+      name: "calculator"
+      defaults:
+        model: haiku
+        max_turns: 20
+      teams:
+        - name: requirements
+          lead: { role: "Requirements Analyst" }
+          tasks:
+            - summary: "Gather requirements"
+              deliverables: ["requirements.md"]
+        - name: architecture
+          lead: { role: "Software Architect" }
+          depends_on: [requirements]
+          tasks:
+            - summary: "Design architecture"
+              deliverables: ["architecture.md"]
+        - name: implementation
+          lead: { role: "Developer" }
+          depends_on: [architecture]
+          tasks:
+            - summary: "Build it"
+              deliverables: ["main.go"]
+      ```
+
+      HACKATHON RULES:
+      - You must produce a proposal at: hackathon/proposals/titan/proposal.md
+      - The proposal must include: language name, design philosophy, syntax examples, grammar sketch, compilation strategy, and tech stack.
+      - Show how your DSL expresses BOTH a simple 3-team pipeline AND a complex 10+ team hackathon DAG.
+      - You are COMPETING against 3 other teams. Each team has a different design philosophy.
+      - Be creative and ambitious but realistic — your build team has ~45 minutes to implement a working compiler.
+
+      TEAM TITAN IDENTITY — Nix/Dhall/CUE-inspired. Your language should be a TYPED CONFIGURATION LANGUAGE — not a general-purpose PL, but a purpose-built config language with a type system that prevents invalid orchestrations. Think about how Dhall guarantees termination, how CUE unifies types and values, how Nix handles reproducibility. Your differentiator is CORRECTNESS — invalid configs are impossible to write.
+
+      OUTPUT DIRECTORY: hackathon/proposals/titan/
+      Create the directory if it doesn't exist. Primary deliverable: proposal.md
+    tasks:
+      - summary: "Research typed configuration language patterns"
+        details: "Study Dhall (typed, total, no side effects), CUE (types as values, constraints, unification), Nix (functional, lazy, reproducible), and Jsonnet (data templating). Identify which patterns prevent invalid orchestration configs. Document in research-notes.md."
+        deliverables:
+          - "hackathon/proposals/titan/research-notes.md"
+        verify: "test -f hackathon/proposals/titan/research-notes.md"
+      - summary: "Design language syntax with multiple examples"
+        details: "Design the core syntax. Show how it expresses: a simple 3-team pipeline, a parallel fan-out/fan-in DAG, a 10-team hackathon, and team templates/reuse. Show how the type system catches errors (missing deps, circular deps, invalid fields). Include at least 4 examples."
+        deliverables:
+          - "hackathon/proposals/titan/syntax-examples.md"
+        verify: "test -f hackathon/proposals/titan/syntax-examples.md"
+      - summary: "Sketch grammar and compilation pipeline"
+        details: "Write a rough grammar (BNF or PEG). Design the compilation pipeline: source → tokens → AST → type-checked AST → orchestra.yaml. Focus on the type system — what types exist, how constraints work, what errors are caught."
+        deliverables:
+          - "hackathon/proposals/titan/grammar.md"
+        verify: "test -f hackathon/proposals/titan/grammar.md"
+      - summary: "Write the final proposal"
+        details: "Synthesize research, syntax design, and grammar into a polished proposal.md. Must include: language name, design philosophy, syntax examples, grammar sketch, type system design, compilation strategy, tech stack, and build plan. Show the SAME orchestra.yaml expressed in your DSL vs raw YAML."
+        deliverables:
+          - "hackathon/proposals/titan/proposal.md"
+        verify: "test -f hackathon/proposals/titan/proposal.md && wc -l hackathon/proposals/titan/proposal.md | awk '{if ($1 >= 30) exit 0; else exit 1}'"
+
+  - name: nova-ideation
+    lead:
+      role: "Language Designer — drives syntax design, evaluates tradeoffs, writes the final language spec"
+    members:
+      - role: "PL Research Analyst"
+        focus: "Research minimal scripting languages, Ruby/Python DSLs, and convention-over-configuration patterns. Document findings in research-notes.md"
+      - role: "Compiler Architect"
+        focus: "Design the compilation pipeline — lexer, parser, AST, codegen. Plan the implementation architecture."
+      - role: "Spec Writer"
+        focus: "Write the full language proposal with syntax examples, grammar sketches, and compilation strategy. Own proposal.md"
+    context: |
+      You are Team Nova in the Cortex Blitz Hackathon. Your mission is to DESIGN a domain-specific language (DSL) for defining multi-agent orchestration workflows.
+
+      THE CHALLENGE:
+      Cortex is an Elixir/OTP multi-agent orchestration system that currently uses YAML config files (orchestra.yaml) to define projects. These YAML files are verbose, repetitive, and error-prone. Your job is to design a better language that compiles DOWN to orchestra.yaml.
+
+      Your DSL must be able to express:
+      - Project name and defaults (model, max_turns, timeout, permissions)
+      - Teams with leads, members, tasks, dependencies, and context
+      - DAG structure via dependency declarations (teams depend on other teams)
+      - Task definitions with summaries, details, deliverables, and verify commands
+
+      TARGET OUTPUT FORMAT (orchestra.yaml schema):
+      ```yaml
+      name: "project-name"
+      defaults:
+        model: sonnet
+        max_turns: 200
+        permission_mode: bypassPermissions
+        timeout_minutes: 120
+      teams:
+        - name: team-name
+          lead:
+            role: "Role description"
+            model: opus
+          members:
+            - role: "Member role"
+              focus: "What this member focuses on"
+          depends_on:
+            - other-team-name
+          context: |
+            Free-form text injected into the team's prompt.
+          tasks:
+            - summary: "Short task description"
+              details: "Detailed instructions"
+              deliverables:
+                - "path/to/output/file.md"
+              verify: "shell command to verify completion"
+      ```
+
+      EXAMPLE — a simple 3-tier DAG:
+      ```yaml
+      name: "calculator"
+      defaults:
+        model: haiku
+        max_turns: 20
+      teams:
+        - name: requirements
+          lead: { role: "Requirements Analyst" }
+          tasks:
+            - summary: "Gather requirements"
+              deliverables: ["requirements.md"]
+        - name: architecture
+          lead: { role: "Software Architect" }
+          depends_on: [requirements]
+          tasks:
+            - summary: "Design architecture"
+              deliverables: ["architecture.md"]
+        - name: implementation
+          lead: { role: "Developer" }
+          depends_on: [architecture]
+          tasks:
+            - summary: "Build it"
+              deliverables: ["main.go"]
+      ```
+
+      HACKATHON RULES:
+      - You must produce a proposal at: hackathon/proposals/nova/proposal.md
+      - The proposal must include: language name, design philosophy, syntax examples, grammar sketch, compilation strategy, and tech stack.
+      - Show how your DSL expresses BOTH a simple 3-team pipeline AND a complex 10+ team hackathon DAG.
+      - You are COMPETING against 3 other teams. Each team has a different design philosophy.
+      - Be creative and ambitious but realistic — your build team has ~45 minutes to implement a working compiler.
+
+      TEAM NOVA IDENTITY — Minimal scripting, zero ceremony. Your language should feel like Python or Ruby — readable by anyone, no boilerplate, convention over configuration. Sensible defaults everywhere. If 80% of teams have the same structure, your syntax should handle that in one line. Think about how Makefiles, Dockerfiles, and GitHub Actions express workflows with minimal syntax. Your differentiator is SIMPLICITY — a new user can read and write it in 5 minutes.
+
+      OUTPUT DIRECTORY: hackathon/proposals/nova/
+      Create the directory if it doesn't exist. Primary deliverable: proposal.md
+    tasks:
+      - summary: "Research minimal DSL and scripting patterns"
+        details: "Study Makefiles, Dockerfiles, GitHub Actions YAML, Terraform HCL, Ruby Rake, and Python click/typer for patterns that minimize boilerplate. Identify how convention-over-configuration reduces verbosity. Document in research-notes.md."
+        deliverables:
+          - "hackathon/proposals/nova/research-notes.md"
+        verify: "test -f hackathon/proposals/nova/research-notes.md"
+      - summary: "Design language syntax with multiple examples"
+        details: "Design the core syntax. Optimize for the common case — a team with a lead, some tasks, and dependencies should be expressible in 3-5 lines. Show at least 4 examples: simple pipeline, parallel DAG, full hackathon, and the 'one-liner' team definition."
+        deliverables:
+          - "hackathon/proposals/nova/syntax-examples.md"
+        verify: "test -f hackathon/proposals/nova/syntax-examples.md"
+      - summary: "Sketch grammar and compilation pipeline"
+        details: "Write a rough grammar (BNF or PEG). Design the compilation pipeline: source → tokens → AST → orchestra.yaml. Focus on how defaults and conventions reduce what the user has to write. Show what can be inferred vs what must be explicit."
+        deliverables:
+          - "hackathon/proposals/nova/grammar.md"
+        verify: "test -f hackathon/proposals/nova/grammar.md"
+      - summary: "Write the final proposal"
+        details: "Synthesize research, syntax design, and grammar into a polished proposal.md. Must include: language name, design philosophy, syntax examples, grammar sketch, compilation strategy, tech stack, and build plan. Show the SAME orchestra.yaml expressed in your DSL vs raw YAML — emphasize the line count reduction."
+        deliverables:
+          - "hackathon/proposals/nova/proposal.md"
+        verify: "test -f hackathon/proposals/nova/proposal.md && wc -l hackathon/proposals/nova/proposal.md | awk '{if ($1 >= 30) exit 0; else exit 1}'"
+
+  # ============================================================
+  # TIER 1 — REVIEW (depends on all 4 ideation teams)
+  # ============================================================
+
+  - name: pitch-review
+    lead:
+      role: "Language Critic — evaluates all 4 DSL proposals for expressiveness, feasibility, and ergonomics"
+    members:
+      - role: "PL Theory Analyst"
+        focus: "Assess each language's formal properties — grammar complexity, parse ambiguity, type soundness, compilation difficulty"
+      - role: "DX Analyst"
+        focus: "Assess each language's developer experience — readability, learnability, error messages, common-case ergonomics"
+    depends_on:
+      - phoenix-ideation
+      - hydra-ideation
+      - titan-ideation
+      - nova-ideation
+    context: |
+      You are the PITCH REVIEWER for the Cortex Blitz Hackathon. Four teams each designed a DSL for agent orchestration. Your job is to catch problems BEFORE teams start building compilers.
+
+      PROPOSALS TO REVIEW:
+      1. Team Phoenix (Haskell/ML-inspired): hackathon/proposals/phoenix/proposal.md
+      2. Team Hydra (Graph-native/pipeline): hackathon/proposals/hydra/proposal.md
+      3. Team Titan (Nix/Dhall/CUE typed config): hackathon/proposals/titan/proposal.md
+      4. Team Nova (Minimal scripting): hackathon/proposals/nova/proposal.md
+
+      REVIEW CRITERIA:
+      1. EXPRESSIVENESS — Can it express the full orchestra.yaml schema? Are there features it can't represent?
+      2. SCOPE — Is the compiler buildable in ~45 minutes? Is the grammar too complex to parse?
+      3. AMBIGUITY — Does the syntax have parsing ambiguities? Are there edge cases that break?
+      4. ERGONOMICS — How much shorter is it than raw YAML? Is it actually easier to read/write?
+      5. OVERLAP — Are any teams converging on the same design? Suggest differentiation.
+
+      Be direct and constructive. The goal is to make sure each team can actually build a working compiler.
+
+      OUTPUT: hackathon/review/review.md
+    tasks:
+      - summary: "Read all proposals and compare syntax designs"
+        details: "Read all 4 proposals thoroughly. Compare their syntax for the same orchestration (3-team pipeline, complex DAG). Create a comparison matrix: expressiveness, verbosity reduction, grammar complexity, implementation difficulty."
+        deliverables:
+          - "hackathon/review/comparison.md"
+        verify: "test -f hackathon/review/comparison.md"
+      - summary: "Evaluate feasibility and grammar complexity"
+        details: "For each team, assess: Can this grammar be parsed unambiguously? Is the compiler buildable in 45 minutes? Are there features that should be cut for scope? Write specific, actionable feedback."
+        deliverables:
+          - "hackathon/review/feasibility.md"
+        verify: "test -f hackathon/review/feasibility.md"
+      - summary: "Write final review with approval status"
+        details: "Compile the comparison and feasibility assessment into a final review. For each team, assign: APPROVED (proceed), REVISE (with specific scope cuts or fixes), or PIVOT. Include per-team feedback."
+        deliverables:
+          - "hackathon/review/review.md"
+        verify: "test -f hackathon/review/review.md && grep -cE 'APPROVED|REVISE|PIVOT' hackathon/review/review.md | awk '{if ($1 >= 4) exit 0; else exit 1}'"
+
+  # ============================================================
+  # TIER 2 — BUILDING (each depends on pitch-review)
+  # Each team builds a working compiler: DSL → orchestra.yaml
+  # ============================================================
+
+  - name: phoenix-build
+    lead:
+      role: "Compiler Engineer — builds the lexer, parser, and codegen. Owns the working compiler."
+    members:
+      - role: "Parser Developer"
+        focus: "Implement the lexer and parser. Build the AST data structures. Handle syntax errors gracefully."
+      - role: "Codegen Developer"
+        focus: "Implement AST → orchestra.yaml emission. Handle all YAML formatting, escaping, and multi-line strings."
+      - role: "QA Engineer"
+        focus: "Write test cases — valid programs that should compile, invalid programs that should error. Verify output matches expected YAML."
+    depends_on:
+      - pitch-review
+    context: |
+      You are Team Phoenix BUILD PHASE in the Cortex Blitz Hackathon. Your ideation team designed a Haskell/ML-inspired DSL and it has been reviewed.
+
+      READ THESE FIRST:
+      1. Your language proposal: hackathon/proposals/phoenix/proposal.md
+      2. Review feedback: hackathon/review/review.md — find Team Phoenix's section and incorporate feedback
+
+      YOUR MISSION: Build a working compiler that takes your DSL as input and outputs valid orchestra.yaml.
+
+      REQUIREMENTS:
+      - Lexer that tokenizes source files
+      - Parser that builds an AST
+      - Codegen that emits orchestra.yaml
+      - At least 2 example .phoenix files (or whatever your extension is) that compile successfully
+      - The compiled YAML must be valid orchestra.yaml (matching the schema from your proposal)
+      - Error messages for invalid input (at minimum: syntax errors, undefined references)
+      - README with install, usage, and example commands
+
+      USE ANY LANGUAGE to build the compiler. Pick whatever lets you move fastest.
+
+      Include a test suite: at least 3 valid programs and 2 invalid programs.
+
+      OUTPUT DIRECTORY: hackathon/submissions/phoenix/
+      Create the directory if it doesn't exist.
+    tasks:
+      - summary: "Read proposal and review feedback, scaffold compiler project"
+        details: "Read your proposal and the review feedback. Incorporate any REVISE suggestions. Set up the compiler project — choose implementation language, initialize project, install parser libraries if needed."
+        deliverables:
+          - "hackathon/submissions/phoenix/"
+        verify: "test -d hackathon/submissions/phoenix && find hackathon/submissions/phoenix -type f | grep -q ."
+      - summary: "Implement lexer and parser"
+        details: "Build the lexer (tokenizer) and parser. The parser should produce a clean AST. Handle syntax errors with useful error messages including line numbers."
+        deliverables:
+          - "hackathon/submissions/phoenix/"
+        verify: "find hackathon/submissions/phoenix -type f \\( -name '*.ts' -o -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.hs' -o -name '*.rs' \\) | grep -q ."
+      - summary: "Implement codegen (AST → orchestra.yaml)"
+        details: "Build the code generator that walks the AST and emits valid orchestra.yaml. Handle: proper YAML indentation, multi-line strings (using |), list formatting, and all orchestra.yaml fields."
+        deliverables:
+          - "hackathon/submissions/phoenix/"
+        verify: "find hackathon/submissions/phoenix -type f | wc -l | awk '{if ($1 >= 5) exit 0; else exit 1}'"
+      - summary: "Write example programs and test suite"
+        details: "Create at least 2 example DSL programs that compile to valid orchestra.yaml. Create at least 2 invalid programs that produce good error messages. Write a test runner or test suite that verifies compilation."
+        deliverables:
+          - "hackathon/submissions/phoenix/examples/"
+        verify: "find hackathon/submissions/phoenix -type f \\( -name '*.test.*' -o -name '*_test.*' -o -name '*spec*' -o -path '*/examples/*' \\) | grep -q ."
+      - summary: "Write README and demo"
+        details: "Write README.md with: language overview, install instructions, usage (how to compile a file), example showing DSL input → YAML output side by side. Include a demo command."
+        deliverables:
+          - "hackathon/submissions/phoenix/README.md"
+        verify: "test -f hackathon/submissions/phoenix/README.md"
+
+  - name: hydra-build
+    lead:
+      role: "Compiler Engineer — builds the lexer, parser, and codegen. Owns the working compiler."
+    members:
+      - role: "Parser Developer"
+        focus: "Implement the lexer and parser. Build the AST with graph/pipeline structures."
+      - role: "Codegen Developer"
+        focus: "Implement AST → orchestra.yaml emission. Resolve graph edges into depends_on lists."
+      - role: "QA Engineer"
+        focus: "Write test cases — valid programs, invalid programs, verify YAML output correctness."
+    depends_on:
+      - pitch-review
+    context: |
+      You are Team Hydra BUILD PHASE in the Cortex Blitz Hackathon. Your ideation team designed a graph-native/pipeline DSL and it has been reviewed.
+
+      READ THESE FIRST:
+      1. Your language proposal: hackathon/proposals/hydra/proposal.md
+      2. Review feedback: hackathon/review/review.md — find Team Hydra's section
+
+      YOUR MISSION: Build a working compiler that takes your DSL as input and outputs valid orchestra.yaml.
+
+      REQUIREMENTS:
+      - Lexer, parser, AST, codegen pipeline
+      - At least 2 example programs that compile successfully
+      - Valid orchestra.yaml output
+      - Error messages for invalid input
+      - Test suite with valid and invalid cases
+      - README with install, usage, and examples
+
+      USE ANY LANGUAGE. Pick whatever lets you move fastest.
+
+      OUTPUT DIRECTORY: hackathon/submissions/hydra/
+    tasks:
+      - summary: "Read proposal and review feedback, scaffold compiler project"
+        details: "Read your proposal and review feedback. Incorporate REVISE suggestions. Set up the compiler project."
+        deliverables:
+          - "hackathon/submissions/hydra/"
+        verify: "test -d hackathon/submissions/hydra && find hackathon/submissions/hydra -type f | grep -q ."
+      - summary: "Implement lexer and parser"
+        details: "Build the lexer and parser. Focus on correctly parsing graph/pipeline syntax. Produce a clean AST. Handle syntax errors with line numbers."
+        deliverables:
+          - "hackathon/submissions/hydra/"
+        verify: "find hackathon/submissions/hydra -type f \\( -name '*.ts' -o -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.hs' -o -name '*.rs' \\) | grep -q ."
+      - summary: "Implement codegen (AST → orchestra.yaml)"
+        details: "Build the code generator. Resolve graph edges into depends_on lists. Emit valid orchestra.yaml with proper formatting."
+        deliverables:
+          - "hackathon/submissions/hydra/"
+        verify: "find hackathon/submissions/hydra -type f | wc -l | awk '{if ($1 >= 5) exit 0; else exit 1}'"
+      - summary: "Write example programs and test suite"
+        details: "Create at least 2 example programs and 2 invalid programs. Write tests verifying compilation output."
+        deliverables:
+          - "hackathon/submissions/hydra/examples/"
+        verify: "find hackathon/submissions/hydra -type f \\( -name '*.test.*' -o -name '*_test.*' -o -name '*spec*' -o -path '*/examples/*' \\) | grep -q ."
+      - summary: "Write README and demo"
+        details: "Write README.md with language overview, install, usage, and DSL→YAML side-by-side example."
+        deliverables:
+          - "hackathon/submissions/hydra/README.md"
+        verify: "test -f hackathon/submissions/hydra/README.md"
+
+  - name: titan-build
+    lead:
+      role: "Compiler Engineer — builds the lexer, parser, type checker, and codegen. Owns the working compiler."
+    members:
+      - role: "Parser Developer"
+        focus: "Implement the lexer and parser. Build the AST with type annotation nodes."
+      - role: "Type Checker & Codegen Developer"
+        focus: "Implement type checking pass and AST → orchestra.yaml emission. Catch invalid configs at compile time."
+      - role: "QA Engineer"
+        focus: "Write test cases — valid programs, type errors, runtime errors, verify YAML output."
+    depends_on:
+      - pitch-review
+    context: |
+      You are Team Titan BUILD PHASE in the Cortex Blitz Hackathon. Your ideation team designed a Nix/Dhall/CUE-inspired typed configuration DSL and it has been reviewed.
+
+      READ THESE FIRST:
+      1. Your language proposal: hackathon/proposals/titan/proposal.md
+      2. Review feedback: hackathon/review/review.md — find Team Titan's section
+
+      YOUR MISSION: Build a working compiler that takes your DSL as input and outputs valid orchestra.yaml.
+
+      REQUIREMENTS:
+      - Lexer, parser, type checker, codegen pipeline
+      - At least 2 example programs that compile successfully
+      - At least 1 example that demonstrates a type error being caught
+      - Valid orchestra.yaml output
+      - Error messages with line numbers
+      - Test suite
+      - README with install, usage, and examples
+
+      USE ANY LANGUAGE. Pick whatever lets you move fastest.
+
+      OUTPUT DIRECTORY: hackathon/submissions/titan/
+    tasks:
+      - summary: "Read proposal and review feedback, scaffold compiler project"
+        details: "Read your proposal and review feedback. Incorporate REVISE suggestions. Set up the compiler project."
+        deliverables:
+          - "hackathon/submissions/titan/"
+        verify: "test -d hackathon/submissions/titan && find hackathon/submissions/titan -type f | grep -q ."
+      - summary: "Implement lexer and parser"
+        details: "Build the lexer and parser. Handle type annotations in the syntax. Produce a clean AST."
+        deliverables:
+          - "hackathon/submissions/titan/"
+        verify: "find hackathon/submissions/titan -type f \\( -name '*.ts' -o -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.hs' -o -name '*.rs' \\) | grep -q ."
+      - summary: "Implement type checker and codegen"
+        details: "Build the type checking pass — validate team references, check required fields, detect cycles. Then build the YAML emitter."
+        deliverables:
+          - "hackathon/submissions/titan/"
+        verify: "find hackathon/submissions/titan -type f | wc -l | awk '{if ($1 >= 5) exit 0; else exit 1}'"
+      - summary: "Write example programs and test suite"
+        details: "Create at least 2 valid examples, 1 type error example, and 1 syntax error example. Write tests."
+        deliverables:
+          - "hackathon/submissions/titan/examples/"
+        verify: "find hackathon/submissions/titan -type f \\( -name '*.test.*' -o -name '*_test.*' -o -name '*spec*' -o -path '*/examples/*' \\) | grep -q ."
+      - summary: "Write README and demo"
+        details: "Write README.md with language overview, install, usage, and examples showing both successful compilation and type error catching."
+        deliverables:
+          - "hackathon/submissions/titan/README.md"
+        verify: "test -f hackathon/submissions/titan/README.md"
+
+  - name: nova-build
+    lead:
+      role: "Compiler Engineer — builds the lexer, parser, and codegen. Owns the working compiler."
+    members:
+      - role: "Parser Developer"
+        focus: "Implement the lexer and parser. Keep the grammar minimal. Handle indentation/whitespace."
+      - role: "Codegen Developer"
+        focus: "Implement AST → orchestra.yaml emission. Handle smart defaults — fill in everything the user omitted."
+      - role: "QA Engineer"
+        focus: "Write test cases. Verify that minimal input produces correct full YAML output with defaults applied."
+    depends_on:
+      - pitch-review
+    context: |
+      You are Team Nova BUILD PHASE in the Cortex Blitz Hackathon. Your ideation team designed a minimal scripting DSL and it has been reviewed.
+
+      READ THESE FIRST:
+      1. Your language proposal: hackathon/proposals/nova/proposal.md
+      2. Review feedback: hackathon/review/review.md — find Team Nova's section
+
+      YOUR MISSION: Build a working compiler that takes your DSL as input and outputs valid orchestra.yaml.
+
+      REQUIREMENTS:
+      - Lexer, parser, codegen pipeline
+      - At least 2 example programs that compile successfully
+      - Smart defaults — minimal input should produce full, valid YAML
+      - Valid orchestra.yaml output
+      - Error messages for invalid input
+      - Test suite
+      - README with install, usage, and examples
+
+      USE ANY LANGUAGE. Pick whatever lets you move fastest.
+
+      OUTPUT DIRECTORY: hackathon/submissions/nova/
+    tasks:
+      - summary: "Read proposal and review feedback, scaffold compiler project"
+        details: "Read your proposal and review feedback. Incorporate REVISE suggestions. Set up the compiler project."
+        deliverables:
+          - "hackathon/submissions/nova/"
+        verify: "test -d hackathon/submissions/nova && find hackathon/submissions/nova -type f | grep -q ."
+      - summary: "Implement lexer and parser"
+        details: "Build the lexer and parser. Keep the grammar simple. Focus on making the common case (team with lead + tasks + deps) parse cleanly."
+        deliverables:
+          - "hackathon/submissions/nova/"
+        verify: "find hackathon/submissions/nova -type f \\( -name '*.ts' -o -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.hs' -o -name '*.rs' \\) | grep -q ."
+      - summary: "Implement codegen with smart defaults"
+        details: "Build the code generator. Apply smart defaults everywhere — if the user doesn't specify model, use sonnet. If no timeout, use 30. If no permission_mode, use acceptEdits. Emit clean YAML."
+        deliverables:
+          - "hackathon/submissions/nova/"
+        verify: "find hackathon/submissions/nova -type f | wc -l | awk '{if ($1 >= 5) exit 0; else exit 1}'"
+      - summary: "Write example programs and test suite"
+        details: "Create examples showing the minimal syntax. Show a 3-team pipeline in as few lines as possible. Write tests verifying defaults are applied correctly."
+        deliverables:
+          - "hackathon/submissions/nova/examples/"
+        verify: "find hackathon/submissions/nova -type f \\( -name '*.test.*' -o -name '*_test.*' -o -name '*spec*' -o -path '*/examples/*' \\) | grep -q ."
+      - summary: "Write README and demo"
+        details: "Write README.md emphasizing simplicity. Show the line count comparison: YAML vs your DSL. Include a 'hello world' orchestration in 5 lines or less."
+        deliverables:
+          - "hackathon/submissions/nova/README.md"
+        verify: "test -f hackathon/submissions/nova/README.md"
+
+  # ============================================================
+  # TIER 3 — JUDGING (depends on all 4 build teams)
+  # ============================================================
+
+  - name: judges
+    lead:
+      role: "Head Judge — evaluates all 4 DSL compilers, tests them, and picks the winner"
+    members:
+      - role: "Language Design Judge"
+        focus: "Evaluate syntax elegance, expressiveness, readability, and how well each DSL captures the domain of agent orchestration"
+      - role: "Compiler Quality Judge"
+        focus: "Evaluate code quality, error handling, test coverage, and engineering rigor of each compiler implementation"
+      - role: "Practical Utility Judge"
+        focus: "Evaluate which DSL you'd actually WANT to use daily — ergonomics, learning curve, error messages, documentation"
+    depends_on:
+      - phoenix-build
+      - hydra-build
+      - titan-build
+      - nova-build
+    context: |
+      You are the JUDGE PANEL for the Cortex Blitz Hackathon. Four teams each designed and built a DSL that compiles to orchestra.yaml. You must evaluate them all and pick a winner.
+
+      SUBMISSIONS TO REVIEW:
+      1. Team Phoenix (Haskell/ML-inspired) — Proposal: hackathon/proposals/phoenix/proposal.md | Compiler: hackathon/submissions/phoenix/
+      2. Team Hydra (Graph-native/pipeline) — Proposal: hackathon/proposals/hydra/proposal.md | Compiler: hackathon/submissions/hydra/
+      3. Team Titan (Typed config / Nix/Dhall) — Proposal: hackathon/proposals/titan/proposal.md | Compiler: hackathon/submissions/titan/
+      4. Team Nova (Minimal scripting) — Proposal: hackathon/proposals/nova/proposal.md | Compiler: hackathon/submissions/nova/
+
+      Also read the review feedback at hackathon/review/review.md for context.
+
+      JUDGING CRITERIA (each scored 1-10):
+      1. Language Design (30%) — Syntax elegance, expressiveness, how well it captures the orchestration domain. Does the DSL make DAGs easier to reason about than raw YAML?
+      2. Compiler Quality (25%) — Code quality, error messages, test coverage, engineering rigor. Does the compiler handle edge cases?
+      3. Practical Utility (25%) — Would you actually USE this daily? Learning curve, ergonomics, documentation quality. How much shorter is it than YAML?
+      4. Ambition vs Execution (20%) — How well did the team deliver on their proposal? Did they build what they designed?
+
+      PROCESS:
+      - Read each team's proposal to understand their design philosophy
+      - Review their compiler source code
+      - Try to compile their example programs (check README for instructions)
+      - Try writing a NEW orchestration in each DSL to test learnability
+      - Write individual evaluations before ranking
+      - Be fair but differentiate clearly — there should be a clear winner
+
+      IMPORTANT: The winning DSL will actually be developed further as the real Cortex configuration language. Choose the one with the best foundation for a real product.
+
+      OUTPUT: hackathon/judging/results.md
+    tasks:
+      - summary: "Read all proposals and compare language designs"
+        details: "Read all 4 proposals. Compare syntax for the same orchestration. Which DSL is most expressive? Most readable? Most concise? Take detailed notes."
+        deliverables:
+          - "hackathon/judging/design-notes.md"
+        verify: "test -f hackathon/judging/design-notes.md"
+      - summary: "Review compiler code quality"
+        details: "Review the source code of all 4 compilers. Assess: architecture, error handling, test coverage, code clarity, parser robustness. Score each 1-10."
+        deliverables:
+          - "hackathon/judging/compiler-scores.md"
+        verify: "test -f hackathon/judging/compiler-scores.md"
+      - summary: "Test each compiler with examples"
+        details: "For each submission, follow the README and try to compile their examples. Also try to write a simple 3-team pipeline in each DSL from scratch. Note which compilers work, which break, and what the error experience is like."
+        deliverables:
+          - "hackathon/judging/test-results.md"
+        verify: "test -f hackathon/judging/test-results.md"
+      - summary: "Write final rankings and results"
+        details: "Compile all scores: Language Design 30%, Compiler Quality 25%, Practical Utility 25%, Ambition vs Execution 20%. Write results.md with: per-team detailed feedback, scores table, ranking 1st-4th, winner announcement with justification. Recommend which DSL should become the real Cortex configuration language and what improvements it needs."
+        deliverables:
+          - "hackathon/judging/results.md"
+        verify: "test -f hackathon/judging/results.md && grep -i 'winner' hackathon/judging/results.md"

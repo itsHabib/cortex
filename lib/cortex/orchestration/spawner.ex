@@ -61,6 +61,7 @@ defmodule Cortex.Orchestration.Spawner do
     timeout_minutes = Keyword.get(opts, :timeout_minutes, @default_timeout_minutes)
     log_path = Keyword.get(opts, :log_path)
     command = Keyword.get(opts, :command, @default_command)
+    cwd = Keyword.get(opts, :cwd)
 
     args = build_args(prompt, model, max_turns, permission_mode)
     command_path = resolve_command(command)
@@ -69,7 +70,7 @@ defmodule Cortex.Orchestration.Spawner do
     log_device = open_log_device(log_path)
 
     try do
-      port = open_port(command_path, args)
+      port = open_port(command_path, args, cwd)
       timer_ref = Process.send_after(self(), {:spawner_timeout, port}, timeout_ms)
 
       result = collect_output(port, timer_ref, team_name, log_device)
@@ -111,8 +112,8 @@ defmodule Cortex.Orchestration.Spawner do
     "'" <> String.replace(arg, "'", "'\\''") <> "'"
   end
 
-  @spec open_port(charlist(), [String.t()]) :: port()
-  defp open_port(command_path, args) do
+  @spec open_port(charlist(), [String.t()], String.t() | nil) :: port()
+  defp open_port(command_path, args, cwd) do
     # Strip CLAUDECODE env var so child claude processes don't refuse to start
     # (matches the Go agent-orchestra behavior)
     env =
@@ -125,10 +126,10 @@ defmodule Cortex.Orchestration.Spawner do
     escaped_args = Enum.map(args, &shell_escape/1)
     shell_cmd = Enum.join([to_string(command_path) | escaped_args], " ") <> " </dev/null"
 
-    Port.open(
-      {:spawn_executable, ~c"/bin/sh"},
-      [:binary, :exit_status, :use_stdio, {:args, ["-c", shell_cmd]}, {:env, env}]
-    )
+    port_opts = [:binary, :exit_status, :use_stdio, {:args, ["-c", shell_cmd]}, {:env, env}]
+    port_opts = if cwd, do: [{:cd, String.to_charlist(cwd)} | port_opts], else: port_opts
+
+    Port.open({:spawn_executable, ~c"/bin/sh"}, port_opts)
   end
 
   @spec open_log_device(String.t() | nil) :: File.io_device() | nil

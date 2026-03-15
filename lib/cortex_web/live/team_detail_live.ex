@@ -9,6 +9,7 @@ defmodule CortexWeb.TeamDetailLive do
     team_run = safe_get_team_run(run_id, team_name)
 
     team_config = extract_team_config(run, team_name)
+    team_members = extract_members(run, team_name)
     log_content = read_log(team_run)
 
     {:ok,
@@ -18,6 +19,7 @@ defmodule CortexWeb.TeamDetailLive do
        team_name: team_name,
        team_run: team_run,
        team_config: team_config,
+       team_members: team_members,
        log_content: log_content,
        active_tab: "result",
        page_title: "Team: #{team_name}"
@@ -59,6 +61,19 @@ defmodule CortexWeb.TeamDetailLive do
         <a href={"/runs/#{@run_id}"} class="text-sm text-gray-400 hover:text-white">Back to Run</a>
       </:actions>
     </.header>
+
+    <!-- Team Members -->
+    <div :if={@team_members != []} class="mb-6 bg-gray-900 rounded-lg border border-gray-800 p-4">
+      <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Team Members</h3>
+      <div class="space-y-2">
+        <div :for={member <- @team_members} class="flex items-start gap-3">
+          <span class="inline-flex items-center rounded bg-cortex-900 px-2 py-0.5 text-xs font-medium text-cortex-300 shrink-0">
+            {member.role}
+          </span>
+          <span :if={member.focus} class="text-sm text-gray-400">{member.focus}</span>
+        </div>
+      </div>
+    </div>
 
     <!-- Tabs -->
     <div class="flex border-b border-gray-800 mb-6">
@@ -172,6 +187,35 @@ defmodule CortexWeb.TeamDetailLive do
     end
   rescue
     _ -> nil
+  end
+
+  defp extract_members(nil, _team_name), do: []
+
+  defp extract_members(run, team_name) do
+    if run.config_yaml do
+      case YamlElixir.read_from_string(run.config_yaml) do
+        {:ok, raw} ->
+          teams = Map.get(raw, "teams", [])
+
+          case Enum.find(teams, fn t -> Map.get(t, "name") == team_name end) do
+            nil ->
+              []
+
+            team_map ->
+              (Map.get(team_map, "members") || [])
+              |> Enum.map(fn m ->
+                %{role: Map.get(m, "role", ""), focus: Map.get(m, "focus")}
+              end)
+          end
+
+        _ ->
+          []
+      end
+    else
+      []
+    end
+  rescue
+    _ -> []
   end
 
   defp read_log(nil), do: nil
