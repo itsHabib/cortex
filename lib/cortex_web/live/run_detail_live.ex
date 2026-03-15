@@ -43,6 +43,7 @@ defmodule CortexWeb.RunDetailLive do
            activities: [],
            msg_to: "",
            msg_content: "",
+           resume_workspace_path: "",
            page_title: "Run: #{run.name}"
          )}
     end
@@ -189,13 +190,23 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("set_workspace_path", %{"workspace_path" => path}, socket) do
+    {:noreply, assign(socket, resume_workspace_path: path)}
+  end
+
   def handle_event("resume_dead_teams", _params, socket) do
     run = socket.assigns.run
+    workspace_path = run.workspace_path || non_empty(socket.assigns.resume_workspace_path)
 
-    if run && run.workspace_path do
+    if run && workspace_path do
+      # Persist workspace_path to run if it was manually entered
+      if run.workspace_path == nil do
+        safe_update_workspace(run, workspace_path)
+      end
+
       entry = %{
         team: "system",
-        text: "Resuming dead teams...",
+        text: "Resuming dead teams at #{workspace_path}...",
         kind: :message,
         at: format_now()
       }
@@ -204,7 +215,7 @@ defmodule CortexWeb.RunDetailLive do
 
       # Run resume in a background task so LiveView stays responsive
       Task.start(fn ->
-        case Cortex.Orchestration.Runner.resume_run(run.workspace_path) do
+        case Cortex.Orchestration.Runner.resume_run(workspace_path) do
           {:ok, results} ->
             Cortex.Events.broadcast(:run_resumed, %{
               run_id: run.id,
@@ -262,19 +273,33 @@ defmodule CortexWeb.RunDetailLive do
 
       <!-- Resume Banner (shown when dead teams detected) -->
       <%= if has_dead_teams?(@team_runs, @run.status) do %>
-        <div class="bg-yellow-900/30 border border-yellow-800 rounded-lg p-4 mb-6 flex items-center justify-between">
-          <div>
-            <p class="text-yellow-300 font-medium">Dead teams detected</p>
-            <p class="text-yellow-200/70 text-sm">
-              {count_by_status(@team_runs, "running")} team(s) appear to have crashed. Sessions can be resumed.
-            </p>
+        <div class="bg-yellow-900/30 border border-yellow-800 rounded-lg p-4 mb-6">
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <p class="text-yellow-300 font-medium">Stalled teams detected</p>
+              <p class="text-yellow-200/70 text-sm">
+                {count_by_status(@team_runs, "running")} team(s) show as "running" but their processes have stopped. You can resume their sessions.
+              </p>
+            </div>
+            <button
+              phx-click="resume_dead_teams"
+              class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
+            >
+              Resume Dead Teams
+            </button>
           </div>
-          <button
-            phx-click="resume_dead_teams"
-            class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
-          >
-            Resume Dead Teams
-          </button>
+          <%= unless @run.workspace_path do %>
+            <form phx-change="set_workspace_path" class="flex items-center gap-2 mt-2 pt-2 border-t border-yellow-800/50">
+              <label class="text-xs text-yellow-200/60 shrink-0">Workspace path:</label>
+              <input
+                type="text"
+                name="workspace_path"
+                value={@resume_workspace_path}
+                class="flex-1 bg-gray-950 border border-yellow-800/50 rounded px-2 py-1 text-sm text-gray-300"
+                placeholder="/path/to/project (containing .cortex/)"
+              />
+            </form>
+          <% end %>
         </div>
       <% end %>
 
@@ -562,4 +587,19 @@ defmodule CortexWeb.RunDetailLive do
   defp activity_icon_class(:progress), do: "text-green-400 font-mono"
   defp activity_icon_class(:message), do: "text-yellow-400 font-mono"
   defp activity_icon_class(_), do: "text-gray-400 font-mono"
+
+  defp non_empty(nil), do: nil
+  defp non_empty(""), do: nil
+  defp non_empty(s) when is_binary(s), do: String.trim(s) |> non_empty_trimmed()
+  defp non_empty_trimmed(""), do: nil
+  defp non_empty_trimmed(s), do: Path.expand(s)
+
+  defp safe_update_workspace(run, workspace_path) do
+    case Cortex.Store.get_run(run.id) do
+      nil -> :ok
+      fresh -> Cortex.Store.update_run(fresh, %{workspace_path: workspace_path})
+    end
+  rescue
+    _ -> :ok
+  end
 end
