@@ -673,7 +673,7 @@ defmodule CortexWeb.RunDetailLive do
             <div>
               <p class="text-yellow-300 font-medium">Stalled teams detected</p>
               <p class="text-yellow-200/70 text-sm">
-                {count_stalled(@team_runs, @last_seen)} team(s) show as "running" but have not sent events in over {div(@stale_threshold_seconds, 60)} minutes:
+                {count_stalled(@team_runs, @last_seen)} team(s) show as "running" but have not sent events in over 5 minutes:
                 <span class="font-mono">
                   {stalled_team_names(@team_runs, @last_seen) |> Enum.join(", ")}
                 </span>
