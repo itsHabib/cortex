@@ -22,6 +22,8 @@ defmodule Cortex.Application do
         {Task.Supervisor, name: Cortex.Tool.Supervisor},
         # Agent-backed tool registry for name -> module lookup
         {Cortex.Tool.Registry, []},
+        # Orchestration: Registry for tracking live Runner processes by run_id
+        {Registry, keys: :unique, name: Cortex.Orchestration.RunnerRegistry},
         # Messaging: Registry for mailbox name lookups (agent_id -> mailbox pid)
         {Registry, keys: :unique, name: Cortex.Messaging.MailboxRegistry},
         # Messaging: Router singleton for message routing between agents

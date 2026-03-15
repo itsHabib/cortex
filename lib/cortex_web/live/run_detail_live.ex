@@ -48,6 +48,9 @@ defmodule CortexWeb.RunDetailLive do
         team_members = extract_team_members(run)
         team_names = Enum.map(team_runs, & &1.team_name)
 
+        coordinator_alive =
+          Cortex.Orchestration.Runner.coordinator_alive?(run.id)
+
         {:ok,
          assign(socket,
            run: run,
@@ -72,6 +75,7 @@ defmodule CortexWeb.RunDetailLive do
            team_outbox: [],
            diagnostics_team: nil,
            diagnostics_report: nil,
+           coordinator_alive: coordinator_alive,
            run_summary: nil
          )}
     end
@@ -98,12 +102,25 @@ defmodule CortexWeb.RunDetailLive do
         team_runs = safe_get_team_runs(run.id)
         {tiers, edges} = build_dag(updated_run || run, team_runs)
 
+        coordinator_alive =
+          Cortex.Orchestration.Runner.coordinator_alive?(run.id)
+
+        # Auto-generate summary on tier/run completion (not every event)
+        run_summary =
+          if type in [:tier_completed, :run_completed] do
+            build_run_summary(updated_run || run, team_runs, socket.assigns.last_seen)
+          else
+            socket.assigns.run_summary
+          end
+
         {:noreply,
          assign(socket,
            run: updated_run || run,
            team_runs: team_runs,
            tiers: tiers,
-           edges: edges
+           edges: edges,
+           coordinator_alive: coordinator_alive,
+           run_summary: run_summary
          )}
     end
   end
@@ -614,7 +631,7 @@ defmodule CortexWeb.RunDetailLive do
 
         enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
 
-        # Mark as running + update prompt in DB
+        # Mark as running + update prompt in DB (synchronous — before Task.start)
         safe_store_call(fn ->
           case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
             nil -> :ok
@@ -629,6 +646,9 @@ defmodule CortexWeb.RunDetailLive do
           end
         end)
 
+        # Re-fetch team_runs so the UI immediately shows "running" (not stale "failed")
+        team_runs = safe_get_team_runs(run.id)
+
         entry = %{
           team: "system",
           text: "Restarting #{team_name} with fresh session (previous session expired)...",
@@ -636,7 +656,10 @@ defmodule CortexWeb.RunDetailLive do
           at: format_now()
         }
 
-        socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
+        socket =
+          socket
+          |> assign(team_runs: team_runs)
+          |> assign(activities: prepend_activity(socket.assigns.activities, entry))
 
         Task.start(fn ->
           result =
@@ -900,8 +923,17 @@ defmodule CortexWeb.RunDetailLive do
 
       <!-- ============ Overview Tab ============ -->
       <div :if={@current_tab == "overview"}>
-        <!-- Status Summary -->
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <!-- Coordinator + Status Summary -->
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+          <div class={[
+            "bg-gray-900 rounded-lg border p-3 text-center",
+            if(@coordinator_alive, do: "border-green-900", else: "border-gray-800")
+          ]}>
+            <p class="text-xs text-gray-500 uppercase">Coordinator</p>
+            <p class={["text-lg font-bold", if(@coordinator_alive, do: "text-green-300", else: "text-gray-500")]}>
+              {if @coordinator_alive, do: "Alive", else: "Dead"}
+            </p>
+          </div>
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-3 text-center">
             <p class="text-xs text-gray-500 uppercase">Pending</p>
             <p class="text-lg font-bold text-gray-400">{count_by_status(@team_runs, "pending")}</p>

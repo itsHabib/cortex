@@ -96,6 +96,23 @@ defmodule Cortex.Orchestration.Runner do
   end
 
   @doc """
+  Checks whether a Runner coordinator process is alive for a given run.
+
+  Returns `true` if a process registered under `{:runner, run_id}` exists
+  and is alive, `false` otherwise. Uses an Elixir Registry lookup (ETS),
+  so this is very fast.
+  """
+  @spec coordinator_alive?(String.t()) :: boolean()
+  def coordinator_alive?(run_id) do
+    case Registry.lookup(Cortex.Orchestration.RunnerRegistry, {:runner, run_id}) do
+      [{pid, _value}] -> Process.alive?(pid)
+      [] -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  @doc """
   Sends a message to a running team's file-based inbox.
 
   Delivers a message to the team's inbox file so that the team's
@@ -351,6 +368,9 @@ defmodule Cortex.Orchestration.Runner do
         fresh = Cortex.Store.get_run(run_id)
         if fresh, do: Cortex.Store.update_run(fresh, %{status: "running"})
       end)
+
+      # Register this process as the coordinator for this run
+      safe_register_runner(run_id)
 
       # Open existing workspace (don't re-init — state.json has completed results)
       workspace = %Workspace{path: Path.join(workspace_path, ".cortex")}
@@ -652,6 +672,9 @@ defmodule Cortex.Orchestration.Runner do
       end
 
     with {:ok, workspace} <- Workspace.init(workspace_path, ws_config) do
+      # Register this process as the coordinator for this run
+      safe_register_runner(run_id)
+
       # Start outbox watcher for progress messages
       _watcher_pid =
         safe_start_watcher(
@@ -1088,6 +1111,21 @@ defmodule Cortex.Orchestration.Runner do
     rescue
       _ -> :ok
     end
+  end
+
+  @spec safe_register_runner(String.t() | nil) :: :ok
+  defp safe_register_runner(nil), do: :ok
+
+  defp safe_register_runner(run_id) do
+    Registry.register(
+      Cortex.Orchestration.RunnerRegistry,
+      {:runner, run_id},
+      %{started_at: DateTime.utc_now()}
+    )
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   @spec safe_start_watcher(keyword()) :: pid() | nil

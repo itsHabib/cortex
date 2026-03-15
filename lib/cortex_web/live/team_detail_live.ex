@@ -164,15 +164,26 @@ defmodule CortexWeb.TeamDetailLive do
 
       enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
 
-      # Mark as running + update prompt in DB
-      Cortex.Store.update_team_run(team_run, %{
-        status: "running",
-        prompt: enriched_prompt,
-        started_at: DateTime.utc_now(),
-        completed_at: nil,
-        result_summary: nil,
-        session_id: nil
-      })
+      # Mark as running + clear stale result (synchronous — before Task.start)
+      # Fetch fresh from DB to avoid stale changeset race with mark_failed
+      updated_team_run =
+        case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
+          nil -> team_run
+          fresh ->
+            case Cortex.Store.update_team_run(fresh, %{
+              status: "running",
+              prompt: enriched_prompt,
+              started_at: DateTime.utc_now(),
+              completed_at: nil,
+              result_summary: nil,
+              session_id: nil
+            }) do
+              {:ok, updated} -> updated
+              _ -> fresh
+            end
+        end
+
+      socket = assign(socket, team_run: updated_team_run)
 
       Task.start(fn ->
         result =
