@@ -19,6 +19,10 @@ defmodule Cortex.Store.Schemas.TeamRun do
     field(:status, :string, default: "pending")
     field(:tier, :integer)
     field(:cost_usd, :float, default: 0.0)
+    field(:input_tokens, :integer)
+    field(:output_tokens, :integer)
+    field(:cache_read_tokens, :integer)
+    field(:cache_creation_tokens, :integer)
     field(:duration_ms, :integer)
     field(:num_turns, :integer)
     field(:session_id, :string)
@@ -34,7 +38,7 @@ defmodule Cortex.Store.Schemas.TeamRun do
   end
 
   @required_fields ~w(team_name run_id)a
-  @optional_fields ~w(role status tier cost_usd duration_ms num_turns session_id result_summary prompt log_path started_at completed_at)a
+  @optional_fields ~w(role status tier cost_usd input_tokens output_tokens cache_read_tokens cache_creation_tokens duration_ms num_turns session_id result_summary prompt log_path started_at completed_at)a
 
   def changeset(team_run, attrs) do
     team_run

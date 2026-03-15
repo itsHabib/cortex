@@ -75,18 +75,36 @@ defmodule Cortex.Orchestration.TeamState do
     - `result_summary` — short text summary of what the team accomplished
     - `artifacts` — list of file paths or artifact identifiers produced
     - `cost_usd` — total API cost in USD for this team's execution
+    - `input_tokens` — input tokens consumed
+    - `output_tokens` — output tokens produced
+    - `cache_read_tokens` — cache read input tokens
+    - `cache_creation_tokens` — cache creation input tokens
     - `duration_ms` — wall-clock execution time in milliseconds
   """
 
   @valid_statuses ["pending", "running", "done", "failed"]
 
-  defstruct [:status, :result_summary, :artifacts, :cost_usd, :duration_ms]
+  defstruct [
+    :status,
+    :result_summary,
+    :artifacts,
+    :cost_usd,
+    :input_tokens,
+    :output_tokens,
+    :cache_read_tokens,
+    :cache_creation_tokens,
+    :duration_ms
+  ]
 
   @type t :: %__MODULE__{
           status: String.t() | nil,
           result_summary: String.t() | nil,
           artifacts: [String.t()] | nil,
           cost_usd: float() | nil,
+          input_tokens: non_neg_integer() | nil,
+          output_tokens: non_neg_integer() | nil,
+          cache_read_tokens: non_neg_integer() | nil,
+          cache_creation_tokens: non_neg_integer() | nil,
           duration_ms: integer() | nil
         }
 
@@ -106,6 +124,10 @@ defmodule Cortex.Orchestration.TeamState do
       "result_summary" => ts.result_summary,
       "artifacts" => ts.artifacts,
       "cost_usd" => ts.cost_usd,
+      "input_tokens" => ts.input_tokens,
+      "output_tokens" => ts.output_tokens,
+      "cache_read_tokens" => ts.cache_read_tokens,
+      "cache_creation_tokens" => ts.cache_creation_tokens,
       "duration_ms" => ts.duration_ms
     }
   end
@@ -120,6 +142,10 @@ defmodule Cortex.Orchestration.TeamState do
       result_summary: Map.get(map, "result_summary"),
       artifacts: Map.get(map, "artifacts"),
       cost_usd: Map.get(map, "cost_usd"),
+      input_tokens: Map.get(map, "input_tokens"),
+      output_tokens: Map.get(map, "output_tokens"),
+      cache_read_tokens: Map.get(map, "cache_read_tokens"),
+      cache_creation_tokens: Map.get(map, "cache_creation_tokens"),
       duration_ms: Map.get(map, "duration_ms")
     }
   end

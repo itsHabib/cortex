@@ -7,18 +7,15 @@ defmodule CortexWeb.DashboardLive do
 
     runs = safe_list_runs(limit: 10)
 
-    total_cost =
-      runs
-      |> Enum.map(& &1.total_cost_usd)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sum()
+    {total_input, total_output} = compute_total_tokens(runs)
 
     active_count = Enum.count(runs, fn r -> r.status == "running" end)
 
     {:ok,
      assign(socket,
        runs: runs,
-       total_cost: total_cost,
+       total_input_tokens: total_input,
+       total_output_tokens: total_output,
        active_count: active_count,
        page_title: "Dashboard"
      )}
@@ -29,18 +26,15 @@ defmodule CortexWeb.DashboardLive do
       when type in [:run_started, :run_completed, :team_completed] do
     runs = safe_list_runs(limit: 10)
 
-    total_cost =
-      runs
-      |> Enum.map(& &1.total_cost_usd)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sum()
+    {total_input, total_output} = compute_total_tokens(runs)
 
     active_count = Enum.count(runs, fn r -> r.status == "running" end)
 
     {:noreply,
      assign(socket,
        runs: runs,
-       total_cost: total_cost,
+       total_input_tokens: total_input,
+       total_output_tokens: total_output,
        active_count: active_count
      )}
   end
@@ -73,9 +67,9 @@ defmodule CortexWeb.DashboardLive do
         <p class="text-2xl font-bold text-white mt-1">{@active_count}</p>
       </div>
       <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-        <p class="text-sm text-gray-400">Total Cost</p>
+        <p class="text-sm text-gray-400">Total Tokens</p>
         <p class="text-2xl font-bold text-white mt-1">
-          <.cost_display amount={@total_cost} />
+          <.token_display input={@total_input_tokens} output={@total_output_tokens} />
         </p>
       </div>
     </div>
@@ -94,7 +88,7 @@ defmodule CortexWeb.DashboardLive do
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Name</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Status</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Teams</th>
-              <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Cost</th>
+              <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Tokens</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Duration</th>
               <th class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">Started</th>
             </tr>
@@ -108,7 +102,7 @@ defmodule CortexWeb.DashboardLive do
               </td>
               <td class="px-4 py-3"><.status_badge status={run.status} /></td>
               <td class="px-4 py-3 text-sm text-gray-300">{run.team_count || 0}</td>
-              <td class="px-4 py-3"><.cost_display amount={run.total_cost_usd} /></td>
+              <td class="px-4 py-3"><.token_display input={run.total_input_tokens} output={run.total_output_tokens} /></td>
               <td class="px-4 py-3"><.duration_display ms={run.total_duration_ms} /></td>
               <td class="px-4 py-3 text-sm text-gray-400">{format_time(run.started_at || run.inserted_at)}</td>
             </tr>
@@ -144,4 +138,20 @@ defmodule CortexWeb.DashboardLive do
   end
 
   defp format_time(_), do: "--"
+
+  defp compute_total_tokens(runs) do
+    total_input =
+      runs
+      |> Enum.map(& &1.total_input_tokens)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sum()
+
+    total_output =
+      runs
+      |> Enum.map(& &1.total_output_tokens)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sum()
+
+    {total_input, total_output}
+  end
 end

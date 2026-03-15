@@ -146,10 +146,10 @@ defmodule CortexWeb.RunListLive do
               </th>
               <th
                 phx-click="sort"
-                phx-value-field="total_cost_usd"
+                phx-value-field="total_input_tokens"
                 class="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3 cursor-pointer hover:text-gray-200"
               >
-                Cost {sort_indicator(@sort_field, @sort_dir, :total_cost_usd)}
+                Tokens {sort_indicator(@sort_field, @sort_dir, :total_input_tokens)}
               </th>
               <th
                 phx-click="sort"
@@ -176,7 +176,7 @@ defmodule CortexWeb.RunListLive do
               </td>
               <td class="px-4 py-3"><.status_badge status={run.status} /></td>
               <td class="px-4 py-3 text-sm text-gray-300">{run.team_count || 0}</td>
-              <td class="px-4 py-3"><.cost_display amount={run.total_cost_usd} /></td>
+              <td class="px-4 py-3"><.token_display input={run.total_input_tokens} output={run.total_output_tokens} /></td>
               <td class="px-4 py-3"><.duration_display ms={run.total_duration_ms} /></td>
               <td class="px-4 py-3 text-sm text-gray-400">{format_time(run.started_at || run.inserted_at)}</td>
             </tr>

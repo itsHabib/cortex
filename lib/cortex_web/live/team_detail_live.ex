@@ -49,7 +49,7 @@ defmodule CortexWeb.TeamDetailLive do
         <%= if @team_run do %>
           <.status_badge status={@team_run.status || "pending"} />
           <span :if={@team_run.role} class="ml-2 text-gray-400">{@team_run.role}</span>
-          <span class="ml-2 text-gray-400"><.cost_display amount={team_cost(@team_run)} /></span>
+          <span class="ml-2 text-gray-400"><.token_display input={team_input_tokens(@team_run)} output={team_output_tokens(@team_run)} /></span>
           <span class="ml-2 text-gray-400"><.duration_display ms={team_duration(@team_run)} /></span>
         <% else %>
           <span class="text-gray-400">Team not found in this run</span>
@@ -142,8 +142,11 @@ defmodule CortexWeb.TeamDetailLive do
     _ -> :ok
   end
 
-  defp team_cost(nil), do: nil
-  defp team_cost(team_run), do: team_run.cost_usd
+  defp team_input_tokens(nil), do: nil
+  defp team_input_tokens(team_run), do: team_run.input_tokens
+
+  defp team_output_tokens(nil), do: nil
+  defp team_output_tokens(team_run), do: team_run.output_tokens
 
   defp team_duration(nil), do: nil
   defp team_duration(team_run), do: team_run.duration_ms

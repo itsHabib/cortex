@@ -213,12 +213,26 @@ defmodule Cortex.Orchestration.Runner do
                 |> Enum.map(fn ts -> ts.cost_usd || 0.0 end)
                 |> Enum.sum()
 
+              total_input_tokens =
+                state.teams
+                |> Map.values()
+                |> Enum.map(fn ts -> ts.input_tokens || 0 end)
+                |> Enum.sum()
+
+              total_output_tokens =
+                state.teams
+                |> Map.values()
+                |> Enum.map(fn ts -> ts.output_tokens || 0 end)
+                |> Enum.sum()
+
               run = Cortex.Store.get_run(run_id)
 
               if run do
                 Cortex.Store.update_run(run, %{
                   status: "completed",
                   total_cost_usd: total_cost,
+                  total_input_tokens: total_input_tokens,
+                  total_output_tokens: total_output_tokens,
                   total_duration_ms: run_duration,
                   completed_at: DateTime.utc_now()
                 })
@@ -379,6 +393,10 @@ defmodule Cortex.Orchestration.Runner do
       status: "done",
       result_summary: result.result,
       cost_usd: result.cost_usd,
+      input_tokens: result.input_tokens,
+      output_tokens: result.output_tokens,
+      cache_read_tokens: result.cache_read_tokens,
+      cache_creation_tokens: result.cache_creation_tokens,
       duration_ms: result.duration_ms
     )
 
@@ -399,6 +417,10 @@ defmodule Cortex.Orchestration.Runner do
       status: "failed",
       result_summary: result.result,
       cost_usd: result.cost_usd,
+      input_tokens: result.input_tokens,
+      output_tokens: result.output_tokens,
+      cache_read_tokens: result.cache_read_tokens,
+      cache_creation_tokens: result.cache_creation_tokens,
       duration_ms: result.duration_ms
     )
 
@@ -443,6 +465,10 @@ defmodule Cortex.Orchestration.Runner do
           Cortex.Store.update_team_run(team_run, %{
             status: "completed",
             cost_usd: result.cost_usd,
+            input_tokens: result.input_tokens,
+            output_tokens: result.output_tokens,
+            cache_read_tokens: result.cache_read_tokens,
+            cache_creation_tokens: result.cache_creation_tokens,
             duration_ms: result.duration_ms,
             num_turns: result.num_turns,
             session_id: result.session_id,
@@ -465,6 +491,10 @@ defmodule Cortex.Orchestration.Runner do
           Cortex.Store.update_team_run(team_run, %{
             status: "failed",
             cost_usd: result.cost_usd,
+            input_tokens: result.input_tokens,
+            output_tokens: result.output_tokens,
+            cache_read_tokens: result.cache_read_tokens,
+            cache_creation_tokens: result.cache_creation_tokens,
             duration_ms: result.duration_ms,
             num_turns: result.num_turns,
             session_id: result.session_id,
@@ -523,6 +553,10 @@ defmodule Cortex.Orchestration.Runner do
       "status" => Atom.to_string(result.status),
       "result" => result.result,
       "cost_usd" => result.cost_usd,
+      "input_tokens" => result.input_tokens,
+      "output_tokens" => result.output_tokens,
+      "cache_read_tokens" => result.cache_read_tokens,
+      "cache_creation_tokens" => result.cache_creation_tokens,
       "num_turns" => result.num_turns,
       "duration_ms" => result.duration_ms,
       "session_id" => result.session_id
@@ -642,6 +676,18 @@ defmodule Cortex.Orchestration.Runner do
       |> Enum.map(fn ts -> ts.cost_usd || 0.0 end)
       |> Enum.sum()
 
+    total_input_tokens =
+      state.teams
+      |> Map.values()
+      |> Enum.map(fn ts -> ts.input_tokens || 0 end)
+      |> Enum.sum()
+
+    total_output_tokens =
+      state.teams
+      |> Map.values()
+      |> Enum.map(fn ts -> ts.output_tokens || 0 end)
+      |> Enum.sum()
+
     total_duration =
       state.teams
       |> Map.values()
@@ -659,6 +705,8 @@ defmodule Cortex.Orchestration.Runner do
          %{
            status: ts.status,
            cost_usd: ts.cost_usd,
+           input_tokens: ts.input_tokens,
+           output_tokens: ts.output_tokens,
            duration_ms: ts.duration_ms,
            result_summary: ts.result_summary
          }}
@@ -673,6 +721,8 @@ defmodule Cortex.Orchestration.Runner do
        project: config.name,
        teams: team_results,
        total_cost: total_cost,
+       total_input_tokens: total_input_tokens,
+       total_output_tokens: total_output_tokens,
        total_duration_ms: total_duration,
        wall_clock_ms: wall_clock_ms,
        summary: summary_text

@@ -9,7 +9,7 @@ defmodule CortexWeb.RunController do
   """
   use CortexWeb, :controller
 
-  action_fallback CortexWeb.FallbackController
+  action_fallback(CortexWeb.FallbackController)
 
   alias Cortex.Store
   alias Cortex.Store.Schemas.Run
@@ -64,11 +64,13 @@ defmodule CortexWeb.RunController do
   end
 
   defp parse_int(nil, default), do: default
+
   defp parse_int(val, default) when is_binary(val) do
     case Integer.parse(val) do
       {n, _} when n >= 0 -> n
       _ -> default
     end
   end
+
   defp parse_int(val, _default) when is_integer(val), do: val
 end

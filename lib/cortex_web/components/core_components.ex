@@ -148,6 +148,51 @@ defmodule CortexWeb.CoreComponents do
   defp format_cost(_), do: "--"
 
   @doc """
+  Formats and displays token counts (input/output).
+
+  ## Examples
+
+      <.token_display input={16584} output={45} />
+      <.token_display input={nil} output={nil} />
+  """
+  attr(:input, :integer, default: nil)
+  attr(:output, :integer, default: nil)
+
+  def token_display(assigns) do
+    ~H"""
+    <span class="text-sm font-mono text-gray-300">
+      {format_token_pair(@input, @output)}
+    </span>
+    """
+  end
+
+  defp format_token_count(nil), do: "0"
+  defp format_token_count(0), do: "0"
+  defp format_token_count(n) when is_integer(n) and n < 1_000, do: Integer.to_string(n)
+
+  defp format_token_count(n) when is_integer(n) do
+    value = n / 1_000
+    formatted = :erlang.float_to_binary(value, decimals: 1)
+
+    formatted =
+      if String.ends_with?(formatted, ".0") do
+        String.trim_trailing(formatted, ".0")
+      else
+        formatted
+      end
+
+    "#{formatted}K"
+  end
+
+  defp format_token_count(_), do: "0"
+
+  defp format_token_pair(nil, nil), do: "--"
+
+  defp format_token_pair(input, output) do
+    "#{format_token_count(input)} in / #{format_token_count(output)} out"
+  end
+
+  @doc """
   Formats and displays duration from milliseconds.
 
   ## Examples

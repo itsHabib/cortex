@@ -6,7 +6,7 @@ defmodule CortexWeb.DashboardLiveTest do
     assert html =~ "Dashboard"
     assert html =~ "Total Runs"
     assert html =~ "Active Runs"
-    assert html =~ "Total Cost"
+    assert html =~ "Total Tokens"
     assert html =~ "New Run"
   end
 

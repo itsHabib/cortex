@@ -259,12 +259,22 @@ defmodule Cortex.Orchestration.Spawner do
     status = parse_status(Map.get(result_map, "subtype", "success"))
     cost = Map.get(result_map, "total_cost_usd") || Map.get(result_map, "cost_usd")
 
+    usage = Map.get(result_map, "usage", %{})
+    input_tokens = Map.get(usage, "input_tokens", 0)
+    output_tokens = Map.get(usage, "output_tokens", 0)
+    cache_read_tokens = Map.get(usage, "cache_read_input_tokens", 0)
+    cache_creation_tokens = Map.get(usage, "cache_creation_input_tokens", 0)
+
     {:ok,
      %TeamResult{
        team: team_name,
        status: status,
        result: Map.get(result_map, "result"),
        cost_usd: cost,
+       input_tokens: input_tokens,
+       output_tokens: output_tokens,
+       cache_read_tokens: cache_read_tokens,
+       cache_creation_tokens: cache_creation_tokens,
        num_turns: Map.get(result_map, "num_turns"),
        duration_ms: Map.get(result_map, "duration_ms"),
        session_id: session_id || Map.get(result_map, "session_id")

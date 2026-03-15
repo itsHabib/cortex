@@ -86,7 +86,7 @@ defmodule CortexWeb.RunDetailLive do
         <:subtitle>
           <.status_badge status={@run.status} />
           <span class="ml-2 text-gray-400">
-            <.cost_display amount={@run.total_cost_usd} />
+            <.token_display input={@run.total_input_tokens} output={@run.total_output_tokens} />
           </span>
           <span class="ml-2 text-gray-400">
             <.duration_display ms={@run.total_duration_ms} />
@@ -130,7 +130,7 @@ defmodule CortexWeb.RunDetailLive do
             <p :if={team.role} class="text-sm text-gray-400 mb-2">{team.role}</p>
             <div class="flex items-center gap-4 text-sm">
               <span class="text-gray-500">Tier {team.tier || 0}</span>
-              <.cost_display amount={team.cost_usd} />
+              <.token_display input={team.input_tokens} output={team.output_tokens} />
               <.duration_display ms={team.duration_ms} />
             </div>
           </a>

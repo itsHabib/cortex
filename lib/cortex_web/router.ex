@@ -17,7 +17,9 @@ defmodule CortexWeb.Router do
   scope "/api", CortexWeb do
     pipe_through(:api)
 
-    resources("/runs", RunController, only: [:index, :create, :show])
+    resources("/runs", RunController, only: [:index, :create, :show]) do
+      resources("/teams", TeamRunController, only: [:index, :show], param: "name")
+    end
   end
 
   scope "/", CortexWeb do
