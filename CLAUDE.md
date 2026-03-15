@@ -37,5 +37,12 @@ mix run bench/dag_bench.exs        # DAG benchmarks
 ## Before You Commit
 1. mix format
 2. mix compile --warnings-as-errors
-3. mix test (all pass)
-4. No IO.inspect or dbg() left in code
+3. mix credo --strict
+4. mix test (all pass)
+5. No IO.inspect or dbg() left in code
+
+## Linting
+- `mix credo --strict` — code quality (style, complexity, refactoring hints)
+- `mix dialyzer` — static type checking (first run builds PLT, takes a few min)
+- `make lint` — runs both
+- `.dialyzer_ignore.exs` — known false positives (Mix tasks, defensive catch-alls)

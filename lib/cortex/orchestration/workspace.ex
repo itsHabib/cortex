@@ -272,9 +272,8 @@ defmodule Cortex.Orchestration.Workspace do
   def read_result(%__MODULE__{path: path}, team_name) when is_binary(team_name) do
     file = Path.join([path, @results_dir, "#{team_name}.json"])
 
-    with {:ok, content} <- File.read(file),
-         {:ok, decoded} <- Jason.decode(content) do
-      {:ok, decoded}
+    with {:ok, content} <- File.read(file) do
+      Jason.decode(content)
     end
   end
 

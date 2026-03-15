@@ -1,4 +1,4 @@
-.PHONY: setup test check run server up down clean status
+.PHONY: setup test check lint run server up down clean status
 
 # -- Development --
 
@@ -8,10 +8,14 @@ setup: ## Install deps, create DB, run migrations
 test: ## Run all tests
 	mix test
 
-check: ## Full CI check: format + compile warnings + tests
+check: ## Full CI check: format + compile warnings + credo + tests
 	mix format --check-formatted && \
 	mix compile --warnings-as-errors && \
+	mix credo --strict && \
 	mix test
+
+lint: ## Run Credo (strict) + Dialyzer
+	mix credo --strict && mix dialyzer
 
 fmt: ## Auto-format all files
 	mix format

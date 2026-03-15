@@ -691,148 +691,151 @@ defmodule CortexWeb.RunDetailLive do
       # Safety check: is the team's OS process still alive?
       if team_pid_alive?(workspace_path, team_name) do
         {:noreply,
-         put_flash(socket, :error,
+         put_flash(
+           socket,
+           :error,
            "#{team_name} process is still alive (PID running). " <>
              "Wait for it to finish or kill it manually before restarting."
          )}
       else
+        # Get original prompt from DB
+        team_run = Enum.find(socket.assigns.team_runs, &(&1.team_name == team_name))
 
-      # Get original prompt from DB
-      team_run = Enum.find(socket.assigns.team_runs, &(&1.team_name == team_name))
+        if team_run && team_run.prompt do
+          run_id = run.id
+          team_run_id = team_run.id
 
-      if team_run && team_run.prompt do
-        run_id = run.id
-        team_run_id = team_run.id
+          # Build restart context from logs
+          log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
 
-        # Build restart context from logs
-        log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+          restart_context =
+            case Cortex.Orchestration.LogParser.parse(log_path) do
+              {:ok, report} -> Cortex.Orchestration.LogParser.build_restart_context(report)
+              _ -> ""
+            end
 
-        restart_context =
-          case Cortex.Orchestration.LogParser.parse(log_path) do
-            {:ok, report} -> Cortex.Orchestration.LogParser.build_restart_context(report)
-            _ -> ""
-          end
+          enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
 
-        enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
-
-        # Mark as running + update prompt in DB (synchronous — before Task.start)
-        safe_store_call(fn ->
-          case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
-            nil ->
-              :ok
-
-            tr ->
-              Cortex.Store.update_team_run(tr, %{
-                status: "running",
-                prompt: enriched_prompt,
-                started_at: DateTime.utc_now(),
-                completed_at: nil,
-                result_summary: nil,
-                session_id: nil
-              })
-          end
-        end)
-
-        # Re-fetch team_runs so the UI immediately shows "running" (not stale "failed")
-        team_runs = safe_get_team_runs(run.id)
-
-        entry = %{
-          team: "system",
-          text: "Restarting #{team_name} with fresh session (previous session expired)...",
-          kind: :resume,
-          at: format_now()
-        }
-
-        socket =
-          socket
-          |> assign(team_runs: team_runs)
-          |> assign(activities: prepend_activity(socket.assigns.activities, entry))
-
-        Task.start(fn ->
-          result =
-            Cortex.Orchestration.Spawner.spawn(
-              team_name: team_name,
-              prompt: enriched_prompt,
-              model: "sonnet",
-              max_turns: 200,
-              permission_mode: "bypassPermissions",
-              timeout_minutes: 45,
-              log_path: log_path,
-              command: "claude",
-              cwd: workspace_path
-            )
-
-          # Persist result to DB
+          # Mark as running + update prompt in DB (synchronous — before Task.start)
           safe_store_call(fn ->
             case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
               nil ->
                 :ok
 
               tr ->
-                attrs =
-                  case result do
-                    {:ok, %{status: :success} = r} ->
-                      %{
-                        status: "completed",
-                        session_id: r.session_id,
-                        cost_usd: r.cost_usd,
-                        input_tokens: r.input_tokens,
-                        output_tokens: r.output_tokens,
-                        cache_read_tokens: r.cache_read_tokens,
-                        cache_creation_tokens: r.cache_creation_tokens,
-                        duration_ms: r.duration_ms,
-                        num_turns: r.num_turns,
-                        result_summary: truncate_for_store(r.result),
-                        completed_at: DateTime.utc_now()
-                      }
-
-                    {:ok, r} ->
-                      %{
-                        status: "failed",
-                        session_id: r.session_id,
-                        cost_usd: r.cost_usd,
-                        input_tokens: r.input_tokens,
-                        output_tokens: r.output_tokens,
-                        duration_ms: r.duration_ms,
-                        result_summary: truncate_for_store(r.result),
-                        completed_at: DateTime.utc_now()
-                      }
-
-                    {:error, reason} ->
-                      %{
-                        status: "failed",
-                        result_summary: "Restart error: #{inspect(reason)}",
-                        completed_at: DateTime.utc_now()
-                      }
-                  end
-
-                Cortex.Store.update_team_run(tr, attrs)
+                Cortex.Store.update_team_run(tr, %{
+                  status: "running",
+                  prompt: enriched_prompt,
+                  started_at: DateTime.utc_now(),
+                  completed_at: nil,
+                  result_summary: nil,
+                  session_id: nil
+                })
             end
           end)
 
-          {status, reason} =
-            case result do
-              {:ok, %{status: :success}} -> {:success, "restarted and completed successfully"}
-              {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
-              {:ok, %{status: status}} -> {:failure, "finished with status: #{status}"}
-              {:error, reason} -> {:failure, inspect(reason)}
-            end
+          # Re-fetch team_runs so the UI immediately shows "running" (not stale "failed")
+          team_runs = safe_get_team_runs(run.id)
 
-          Cortex.Events.broadcast(:team_resume_result, %{
-            run_id: run_id,
-            team_name: team_name,
-            status: status,
-            reason: reason
-          })
+          entry = %{
+            team: "system",
+            text: "Restarting #{team_name} with fresh session (previous session expired)...",
+            kind: :resume,
+            at: format_now()
+          }
 
-          Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
-        end)
+          socket =
+            socket
+            |> assign(team_runs: team_runs)
+            |> assign(activities: prepend_activity(socket.assigns.activities, entry))
 
-        {:noreply, put_flash(socket, :info, "Restarting #{team_name} with fresh session...")}
-      else
-        {:noreply, put_flash(socket, :error, "No prompt found for #{team_name}")}
+          Task.start(fn ->
+            result =
+              Cortex.Orchestration.Spawner.spawn(
+                team_name: team_name,
+                prompt: enriched_prompt,
+                model: "sonnet",
+                max_turns: 200,
+                permission_mode: "bypassPermissions",
+                timeout_minutes: 45,
+                log_path: log_path,
+                command: "claude",
+                cwd: workspace_path
+              )
+
+            # Persist result to DB
+            safe_store_call(fn ->
+              case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
+                nil ->
+                  :ok
+
+                tr ->
+                  attrs =
+                    case result do
+                      {:ok, %{status: :success} = r} ->
+                        %{
+                          status: "completed",
+                          session_id: r.session_id,
+                          cost_usd: r.cost_usd,
+                          input_tokens: r.input_tokens,
+                          output_tokens: r.output_tokens,
+                          cache_read_tokens: r.cache_read_tokens,
+                          cache_creation_tokens: r.cache_creation_tokens,
+                          duration_ms: r.duration_ms,
+                          num_turns: r.num_turns,
+                          result_summary: truncate_for_store(r.result),
+                          completed_at: DateTime.utc_now()
+                        }
+
+                      {:ok, r} ->
+                        %{
+                          status: "failed",
+                          session_id: r.session_id,
+                          cost_usd: r.cost_usd,
+                          input_tokens: r.input_tokens,
+                          output_tokens: r.output_tokens,
+                          duration_ms: r.duration_ms,
+                          result_summary: truncate_for_store(r.result),
+                          completed_at: DateTime.utc_now()
+                        }
+
+                      {:error, reason} ->
+                        %{
+                          status: "failed",
+                          result_summary: "Restart error: #{inspect(reason)}",
+                          completed_at: DateTime.utc_now()
+                        }
+                    end
+
+                  Cortex.Store.update_team_run(tr, attrs)
+              end
+            end)
+
+            {status, reason} =
+              case result do
+                {:ok, %{status: :success}} -> {:success, "restarted and completed successfully"}
+                {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
+                {:ok, %{status: status}} -> {:failure, "finished with status: #{status}"}
+                {:error, reason} -> {:failure, inspect(reason)}
+              end
+
+            Cortex.Events.broadcast(:team_resume_result, %{
+              run_id: run_id,
+              team_name: team_name,
+              status: status,
+              reason: reason
+            })
+
+            Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+          end)
+
+          {:noreply, put_flash(socket, :info, "Restarting #{team_name} with fresh session...")}
+        else
+          {:noreply, put_flash(socket, :error, "No prompt found for #{team_name}")}
+        end
       end
-      end  # close pid_alive? else
+
+      # close pid_alive? else
     else
       {:noreply, put_flash(socket, :error, "No workspace path — cannot restart")}
     end
@@ -1094,7 +1097,8 @@ defmodule CortexWeb.RunDetailLive do
                             case result do
                               {:ok, r} ->
                                 %{
-                                  status: if(r.status == :success, do: "completed", else: "failed"),
+                                  status:
+                                    if(r.status == :success, do: "completed", else: "failed"),
                                   session_id: r.session_id,
                                   cost_usd: r.cost_usd,
                                   input_tokens: r.input_tokens,
@@ -2181,11 +2185,10 @@ defmodule CortexWeb.RunDetailLive do
   defp format_tool_activity(tools, details) do
     tools
     |> Enum.zip(details ++ List.duplicate(nil, max(0, length(tools) - length(details))))
-    |> Enum.map(fn
+    |> Enum.map_join(", ", fn
       {tool, nil} -> tool
       {tool, detail} -> "#{tool}: #{detail}"
     end)
-    |> Enum.join(", ")
   end
 
   defp activity_icon(:tool), do: ">"

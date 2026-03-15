@@ -89,7 +89,7 @@ defmodule Cortex.Orchestration.OrchestrationQETest do
       if deps == [] do
         "        depends_on: []"
       else
-        deps_lines = Enum.map(deps, fn d -> "          - #{d}" end) |> Enum.join("\n")
+        deps_lines = Enum.map_join(deps, "\n", fn d -> "          - #{d}" end)
         "        depends_on:\n#{deps_lines}"
       end
 

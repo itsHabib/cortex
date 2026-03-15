@@ -72,7 +72,7 @@ defmodule Cortex.Orchestration.Config.Validator do
   end
 
   defp validate_teams_present(errors, %Config{teams: teams}) do
-    if is_list(teams) and length(teams) > 0 do
+    if is_list(teams) and teams != [] do
       errors
     else
       ["teams list cannot be empty" | errors]

@@ -239,14 +239,12 @@ defmodule Cortex.Orchestration.LogParser do
     thinking =
       content
       |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == "thinking"))
-      |> Enum.map(&Map.get(&1, "thinking", ""))
-      |> Enum.join(" ")
+      |> Enum.map_join(" ", &Map.get(&1, "thinking", ""))
 
     text =
       content
       |> Enum.filter(&(is_map(&1) and Map.get(&1, "type") == "text"))
-      |> Enum.map(&Map.get(&1, "text", ""))
-      |> Enum.join(" ")
+      |> Enum.map_join(" ", &Map.get(&1, "text", ""))
 
     entries = []
 

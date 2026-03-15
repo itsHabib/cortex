@@ -847,8 +847,7 @@ defmodule CortexWeb.GossipLive do
   defp format_vector_clock(vc) do
     vc
     |> Enum.sort_by(fn {k, _} -> k end)
-    |> Enum.map(fn {k, v} -> "#{String.slice(k, 0, 3)}:#{v}" end)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", fn {k, v} -> "#{String.slice(k, 0, 3)}:#{v}" end)
   end
 
   defp format_time(nil), do: "-"

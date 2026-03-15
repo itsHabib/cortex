@@ -191,18 +191,17 @@ defmodule Cortex.Orchestration.Injection do
   defp build_team_roster(teams, tiers) do
     tiers
     |> Enum.with_index()
-    |> Enum.map(fn {team_names, tier_idx} ->
+    |> Enum.map_join("\n\n", fn {team_names, tier_idx} ->
       team_lines =
-        Enum.map(team_names, fn name ->
+        Enum.map_join(team_names, "\n", fn name ->
           case Enum.find(teams, fn t -> t.name == name end) do
             nil -> "  - #{name}"
             team -> "  - **#{name}** — #{team.lead.role}"
           end
         end)
 
-      "Tier #{tier_idx}:\n#{Enum.join(team_lines, "\n")}"
+      "Tier #{tier_idx}:\n#{team_lines}"
     end)
-    |> Enum.join("\n\n")
   end
 
   # --- Private section builders ---

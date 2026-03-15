@@ -215,9 +215,9 @@ defmodule Cortex.Gossip.Config.Loader do
         else: []
 
     topo_err =
-      if settings.topology not in [:full_mesh, :ring, :random],
-        do: ["invalid topology: #{inspect(settings.topology)}"],
-        else: []
+      if settings.topology in [:full_mesh, :ring, :random],
+        do: [],
+        else: ["invalid topology: #{inspect(settings.topology)}"]
 
     Enum.reverse(round_err ++ interval_err ++ topo_err) ++ errors
   end
