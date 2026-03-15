@@ -382,7 +382,8 @@ defmodule CortexWeb.NewRunLive do
         result =
           Cortex.Orchestration.Runner.run(tmp_path,
             workspace_path: workspace_path,
-            run_id: run_id
+            run_id: run_id,
+            coordinator: true
           )
 
         case result do

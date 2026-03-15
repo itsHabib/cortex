@@ -78,7 +78,9 @@ defmodule Cortex.Orchestration.LogParser do
             # Fill in missing timestamps with last known timestamp
             filled_entries =
               Enum.map(new_entries, fn entry ->
-                if entry.timestamp, do: entry, else: %{entry | timestamp: new_state.last_timestamp}
+                if entry.timestamp,
+                  do: entry,
+                  else: %{entry | timestamp: new_state.last_timestamp}
               end)
 
             {entries ++ filled_entries, new_state}
@@ -127,7 +129,8 @@ defmodule Cortex.Orchestration.LogParser do
 
     lines =
       if report.session_id do
-        lines ++ ["Previous session `#{report.session_id}` has expired and cannot be resumed.", ""]
+        lines ++
+          ["Previous session `#{report.session_id}` has expired and cannot be resumed.", ""]
       else
         lines ++ ["Previous session data was recovered from logs.", ""]
       end
@@ -209,7 +212,8 @@ defmodule Cortex.Orchestration.LogParser do
       tools: []
     }
 
-    {[entry], %{state | session_id: session_id, last_timestamp: timestamp || state.last_timestamp}}
+    {[entry],
+     %{state | session_id: session_id, last_timestamp: timestamp || state.last_timestamp}}
   end
 
   defp process_line(%{"type" => "assistant", "message" => msg}, idx, state) do
@@ -417,7 +421,11 @@ defmodule Cortex.Orchestration.LogParser do
     {[entry], new_state}
   end
 
-  defp process_line(%{"type" => "content_block_start", "content_block" => block} = parsed, idx, state) do
+  defp process_line(
+         %{"type" => "content_block_start", "content_block" => block} = parsed,
+         idx,
+         state
+       ) do
     if Map.get(block, "type") == "tool_use" do
       name = Map.get(block, "name", "unknown")
       timestamp = extract_timestamp(parsed) || state.last_timestamp

@@ -10,6 +10,7 @@ defmodule CortexWeb.RunDetailLive do
   @max_activities 150
   @stale_threshold_seconds 300
   @max_log_lines 500
+  @pid_check_interval_ms 30_000
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -39,7 +40,8 @@ defmodule CortexWeb.RunDetailLive do
            team_outbox: [],
            diagnostics_team: nil,
            diagnostics_report: nil,
-           run_summary: nil
+           run_summary: nil,
+           pid_status: %{}
          )}
 
       run ->
@@ -76,8 +78,15 @@ defmodule CortexWeb.RunDetailLive do
            diagnostics_team: nil,
            diagnostics_report: nil,
            coordinator_alive: coordinator_alive,
-           run_summary: nil
+           run_summary: nil,
+           pid_status: %{}
          )}
+        |> tap(fn _ ->
+          # Start periodic PID health check if run is active
+          if run.status in ["running", "failed"] and connected?(socket) do
+            send(self(), :check_pids)
+          end
+        end)
     end
   end
 
@@ -105,10 +114,12 @@ defmodule CortexWeb.RunDetailLive do
         coordinator_alive =
           Cortex.Orchestration.Runner.coordinator_alive?(run.id)
 
-        # Auto-generate summary on tier/run completion (not every event)
+        # Auto-generate summary on tier/run completion (with full diagnostics)
         run_summary =
           if type in [:tier_completed, :run_completed] do
-            build_run_summary(updated_run || run, team_runs, socket.assigns.last_seen)
+            build_run_summary(updated_run || run, team_runs, socket.assigns.last_seen,
+              include_diagnostics: true
+            )
           else
             socket.assigns.run_summary
           end
@@ -151,7 +162,19 @@ defmodule CortexWeb.RunDetailLive do
 
       updated_run = %{run | total_input_tokens: total_input, total_output_tokens: total_output}
 
-      {:noreply, assign(socket, team_runs: team_runs, run: updated_run, last_seen: last_seen)}
+      # Auto-refresh summary if one exists (skip expensive diag loading)
+      run_summary =
+        if socket.assigns.run_summary do
+          build_run_summary(updated_run, team_runs, last_seen, include_diagnostics: false)
+        end
+
+      {:noreply,
+       assign(socket,
+         team_runs: team_runs,
+         run: updated_run,
+         last_seen: last_seen,
+         run_summary: run_summary
+       )}
     else
       {:noreply, socket}
     end
@@ -167,11 +190,12 @@ defmodule CortexWeb.RunDetailLive do
       last_seen = Map.put(socket.assigns.last_seen, team_name, DateTime.utc_now())
 
       tools = Map.get(payload, :tools, [])
-      tool_str = Enum.join(tools, ", ")
+      details = Map.get(payload, :details, [])
+      text = format_tool_activity(tools, details)
 
       entry = %{
         team: team_name,
-        text: "using #{tool_str}",
+        text: text,
         kind: :tool,
         at: format_now()
       }
@@ -276,6 +300,23 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  # -- PID health check (periodic) --
+
+  def handle_info(:check_pids, socket) do
+    run = socket.assigns.run
+
+    if run && run.workspace_path && run.status in ["running", "failed"] do
+      pid_status = check_all_team_pids(run.workspace_path)
+
+      # Schedule next check
+      Process.send_after(self(), :check_pids, @pid_check_interval_ms)
+
+      {:noreply, assign(socket, pid_status: pid_status)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # -- Event handlers: tab switching --
@@ -284,6 +325,11 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("switch_tab", %{"tab" => "logs"}, socket) do
     socket =
       cond do
+        socket.assigns.selected_log_team == "__all__" ->
+          log_lines = read_all_team_logs(socket.assigns.run, socket.assigns.team_names)
+          sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+          assign(socket, log_lines: sorted)
+
         socket.assigns.selected_log_team ->
           log_lines = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
           sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
@@ -318,7 +364,13 @@ defmodule CortexWeb.RunDetailLive do
     socket =
       cond do
         socket.assigns.diagnostics_team ->
-          report = load_diagnostics(socket.assigns.run, socket.assigns.diagnostics_team)
+          team_status = get_team_status(socket.assigns.team_runs, socket.assigns.diagnostics_team)
+
+          report =
+            load_diagnostics(socket.assigns.run, socket.assigns.diagnostics_team,
+              team_status: team_status
+            )
+
           assign(socket, diagnostics_report: report)
 
         socket.assigns.team_names != [] ->
@@ -329,7 +381,8 @@ defmodule CortexWeb.RunDetailLive do
             end)
 
           first_name = if first, do: first.team_name, else: hd(socket.assigns.team_names)
-          report = load_diagnostics(socket.assigns.run, first_name)
+          team_status = get_team_status(socket.assigns.team_runs, first_name)
+          report = load_diagnostics(socket.assigns.run, first_name, team_status: team_status)
           assign(socket, diagnostics_team: first_name, diagnostics_report: report)
 
         true ->
@@ -350,6 +403,14 @@ defmodule CortexWeb.RunDetailLive do
      assign(socket, selected_log_team: nil, log_lines: nil, expanded_logs: MapSet.new())}
   end
 
+  def handle_event("select_log_team", %{"team" => "__all__"}, socket) do
+    log_lines = read_all_team_logs(socket.assigns.run, socket.assigns.team_names)
+    sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+
+    {:noreply,
+     assign(socket, selected_log_team: "__all__", log_lines: sorted, expanded_logs: MapSet.new())}
+  end
+
   def handle_event("select_log_team", %{"team" => team_name}, socket) do
     log_lines = read_team_log(socket.assigns.run, team_name)
     sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
@@ -359,12 +420,19 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   def handle_event("refresh_logs", _params, socket) do
-    if socket.assigns.selected_log_team do
-      log_lines = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
-      sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
-      {:noreply, assign(socket, log_lines: sorted, expanded_logs: MapSet.new())}
-    else
-      {:noreply, socket}
+    case socket.assigns.selected_log_team do
+      nil ->
+        {:noreply, socket}
+
+      "__all__" ->
+        log_lines = read_all_team_logs(socket.assigns.run, socket.assigns.team_names)
+        sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+        {:noreply, assign(socket, log_lines: sorted, expanded_logs: MapSet.new())}
+
+      team_name ->
+        log_lines = read_team_log(socket.assigns.run, team_name)
+        sorted = sort_log_lines(log_lines, socket.assigns.log_sort)
+        {:noreply, assign(socket, log_lines: sorted, expanded_logs: MapSet.new())}
     end
   end
 
@@ -399,13 +467,20 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   def handle_event("select_diag_team", %{"team" => team_name}, socket) do
-    report = load_diagnostics(socket.assigns.run, team_name)
+    team_status = get_team_status(socket.assigns.team_runs, team_name)
+    report = load_diagnostics(socket.assigns.run, team_name, team_status: team_status)
     {:noreply, assign(socket, diagnostics_team: team_name, diagnostics_report: report)}
   end
 
   def handle_event("refresh_diagnostics", _params, socket) do
     if socket.assigns.diagnostics_team do
-      report = load_diagnostics(socket.assigns.run, socket.assigns.diagnostics_team)
+      team_status = get_team_status(socket.assigns.team_runs, socket.assigns.diagnostics_team)
+
+      report =
+        load_diagnostics(socket.assigns.run, socket.assigns.diagnostics_team,
+          team_status: team_status
+        )
+
       {:noreply, assign(socket, diagnostics_report: report)}
     else
       {:noreply, socket}
@@ -613,6 +688,15 @@ defmodule CortexWeb.RunDetailLive do
     workspace_path = run && run.workspace_path
 
     if run && workspace_path do
+      # Safety check: is the team's OS process still alive?
+      if team_pid_alive?(workspace_path, team_name) do
+        {:noreply,
+         put_flash(socket, :error,
+           "#{team_name} process is still alive (PID running). " <>
+             "Wait for it to finish or kill it manually before restarting."
+         )}
+      else
+
       # Get original prompt from DB
       team_run = Enum.find(socket.assigns.team_runs, &(&1.team_name == team_name))
 
@@ -634,15 +718,18 @@ defmodule CortexWeb.RunDetailLive do
         # Mark as running + update prompt in DB (synchronous — before Task.start)
         safe_store_call(fn ->
           case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
-            nil -> :ok
-            tr -> Cortex.Store.update_team_run(tr, %{
-              status: "running",
-              prompt: enriched_prompt,
-              started_at: DateTime.utc_now(),
-              completed_at: nil,
-              result_summary: nil,
-              session_id: nil
-            })
+            nil ->
+              :ok
+
+            tr ->
+              Cortex.Store.update_team_run(tr, %{
+                status: "running",
+                prompt: enriched_prompt,
+                started_at: DateTime.utc_now(),
+                completed_at: nil,
+                result_summary: nil,
+                session_id: nil
+              })
           end
         end)
 
@@ -678,24 +765,47 @@ defmodule CortexWeb.RunDetailLive do
           # Persist result to DB
           safe_store_call(fn ->
             case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
-              nil -> :ok
+              nil ->
+                :ok
+
               tr ->
-                attrs = case result do
-                  {:ok, %{status: :success} = r} ->
-                    %{status: "completed", session_id: r.session_id, cost_usd: r.cost_usd,
-                      input_tokens: r.input_tokens, output_tokens: r.output_tokens,
-                      cache_read_tokens: r.cache_read_tokens, cache_creation_tokens: r.cache_creation_tokens,
-                      duration_ms: r.duration_ms, num_turns: r.num_turns,
-                      result_summary: truncate_for_store(r.result), completed_at: DateTime.utc_now()}
-                  {:ok, r} ->
-                    %{status: "failed", session_id: r.session_id, cost_usd: r.cost_usd,
-                      input_tokens: r.input_tokens, output_tokens: r.output_tokens,
-                      duration_ms: r.duration_ms, result_summary: truncate_for_store(r.result),
-                      completed_at: DateTime.utc_now()}
-                  {:error, reason} ->
-                    %{status: "failed", result_summary: "Restart error: #{inspect(reason)}",
-                      completed_at: DateTime.utc_now()}
-                end
+                attrs =
+                  case result do
+                    {:ok, %{status: :success} = r} ->
+                      %{
+                        status: "completed",
+                        session_id: r.session_id,
+                        cost_usd: r.cost_usd,
+                        input_tokens: r.input_tokens,
+                        output_tokens: r.output_tokens,
+                        cache_read_tokens: r.cache_read_tokens,
+                        cache_creation_tokens: r.cache_creation_tokens,
+                        duration_ms: r.duration_ms,
+                        num_turns: r.num_turns,
+                        result_summary: truncate_for_store(r.result),
+                        completed_at: DateTime.utc_now()
+                      }
+
+                    {:ok, r} ->
+                      %{
+                        status: "failed",
+                        session_id: r.session_id,
+                        cost_usd: r.cost_usd,
+                        input_tokens: r.input_tokens,
+                        output_tokens: r.output_tokens,
+                        duration_ms: r.duration_ms,
+                        result_summary: truncate_for_store(r.result),
+                        completed_at: DateTime.utc_now()
+                      }
+
+                    {:error, reason} ->
+                      %{
+                        status: "failed",
+                        result_summary: "Restart error: #{inspect(reason)}",
+                        completed_at: DateTime.utc_now()
+                      }
+                  end
+
                 Cortex.Store.update_team_run(tr, attrs)
             end
           end)
@@ -722,6 +832,7 @@ defmodule CortexWeb.RunDetailLive do
       else
         {:noreply, put_flash(socket, :error, "No prompt found for #{team_name}")}
       end
+      end  # close pid_alive? else
     else
       {:noreply, put_flash(socket, :error, "No workspace path — cannot restart")}
     end
@@ -869,9 +980,163 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("start_coordinator", _params, socket) do
+    run = socket.assigns.run
+
+    if run && run.workspace_path && run.config_yaml do
+      # Build coordinator prompt from stored config
+      case Cortex.Orchestration.Config.Loader.load_string(run.config_yaml) do
+        {:ok, config, _warnings} ->
+          case Cortex.Orchestration.DAG.build_tiers(config.teams) do
+            {:ok, tiers} ->
+              workspace_path = run.workspace_path
+              cortex_path = Path.join(workspace_path, ".cortex")
+
+              # Set up coordinator inbox
+              Cortex.Messaging.InboxBridge.setup(workspace_path, ["coordinator"])
+
+              prompt =
+                Cortex.Orchestration.Injection.build_coordinator_prompt(
+                  config,
+                  tiers,
+                  cortex_path
+                )
+
+              log_path = Path.join([cortex_path, "logs", "coordinator.log"])
+
+              entry = %{
+                team: "system",
+                text: "Starting coordinator agent...",
+                kind: :resume,
+                at: format_now()
+              }
+
+              run_id = run.id
+
+              on_activity = fn name, activity ->
+                Cortex.Events.broadcast(:team_activity, %{
+                  run_id: run_id,
+                  team_name: name,
+                  type: activity.type,
+                  tools: Map.get(activity, :tools, []),
+                  details: Map.get(activity, :details, []),
+                  timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+                })
+              end
+
+              on_token_update = fn name, tokens ->
+                Cortex.Events.broadcast(:team_tokens_updated, %{
+                  run_id: run_id,
+                  team_name: name,
+                  input_tokens: tokens.input_tokens,
+                  output_tokens: tokens.output_tokens,
+                  cache_read_tokens: tokens.cache_read_tokens,
+                  cache_creation_tokens: tokens.cache_creation_tokens
+                })
+              end
+
+              # Store PID in registry.json so health checks pick it up
+              workspace = %Cortex.Orchestration.Workspace{path: cortex_path}
+
+              on_port_opened = fn _name, os_pid ->
+                if os_pid do
+                  Cortex.Orchestration.Workspace.update_registry_entry(
+                    workspace,
+                    "coordinator",
+                    pid: os_pid,
+                    status: "running",
+                    started_at: DateTime.utc_now() |> DateTime.to_iso8601()
+                  )
+                end
+              end
+
+              # Create DB record for the coordinator
+              safe_store_call(fn ->
+                Cortex.Store.create_team_run(%{
+                  run_id: run_id,
+                  team_name: "coordinator",
+                  role: "Runtime Coordinator",
+                  tier: -1,
+                  status: "running",
+                  prompt: prompt,
+                  log_path: log_path,
+                  started_at: DateTime.utc_now()
+                })
+              end)
+
+              Task.start(fn ->
+                result =
+                  Cortex.Orchestration.Spawner.spawn(
+                    team_name: "coordinator",
+                    prompt: prompt,
+                    model: "haiku",
+                    max_turns: 500,
+                    permission_mode: "bypassPermissions",
+                    timeout_minutes: 120,
+                    log_path: log_path,
+                    command: "claude",
+                    cwd: workspace_path,
+                    on_activity: on_activity,
+                    on_token_update: on_token_update,
+                    on_port_opened: on_port_opened
+                  )
+
+                # Update DB with final result
+                safe_store_call(fn ->
+                  case Cortex.Store.get_team_runs(run_id) do
+                    team_runs when is_list(team_runs) ->
+                      case Enum.find(team_runs, &(&1.team_name == "coordinator")) do
+                        nil ->
+                          :ok
+
+                        tr ->
+                          attrs =
+                            case result do
+                              {:ok, r} ->
+                                %{
+                                  status: if(r.status == :success, do: "completed", else: "failed"),
+                                  session_id: r.session_id,
+                                  cost_usd: r.cost_usd,
+                                  input_tokens: r.input_tokens,
+                                  output_tokens: r.output_tokens,
+                                  completed_at: DateTime.utc_now()
+                                }
+
+                              {:error, _} ->
+                                %{status: "failed", completed_at: DateTime.utc_now()}
+                            end
+
+                          Cortex.Store.update_team_run(tr, attrs)
+                      end
+
+                    _ ->
+                      :ok
+                  end
+                end)
+              end)
+
+              {:noreply,
+               socket
+               |> assign(activities: prepend_activity(socket.assigns.activities, entry))
+               |> put_flash(:info, "Coordinator agent started")}
+
+            _ ->
+              {:noreply, put_flash(socket, :error, "Failed to build DAG from config")}
+          end
+
+        _ ->
+          {:noreply, put_flash(socket, :error, "Failed to parse run config")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "No workspace path or config available")}
+    end
+  end
+
   def handle_event("generate_summary", _params, socket) do
     summary =
-      build_run_summary(socket.assigns.run, socket.assigns.team_runs, socket.assigns.last_seen)
+      build_run_summary(socket.assigns.run, socket.assigns.team_runs, socket.assigns.last_seen,
+        include_diagnostics: true
+      )
 
     {:noreply, assign(socket, run_summary: summary)}
   end
@@ -926,15 +1191,15 @@ defmodule CortexWeb.RunDetailLive do
       </.header>
 
       <!-- Resume Banner (visible across all tabs when stalled teams detected) -->
-      <%= if has_stalled_teams?(@team_runs, @run.status, @last_seen) do %>
+      <%= if has_stalled_teams?(@team_runs, @run.status, @last_seen, @pid_status) do %>
         <div class="bg-yellow-900/30 border border-yellow-800 rounded-lg p-4 mb-6">
           <div class="flex items-center justify-between mb-2">
             <div>
               <p class="text-yellow-300 font-medium">Stalled teams detected</p>
               <p class="text-yellow-200/70 text-sm">
-                {count_stalled(@team_runs, @last_seen)} team(s) show as "running" but have not sent events in over 5 minutes:
+                {count_stalled(@team_runs, @last_seen, @pid_status)} team(s) show as "running" but have no live PID and no events in over 5 minutes:
                 <span class="font-mono">
-                  {stalled_team_names(@team_runs, @last_seen) |> Enum.join(", ")}
+                  {stalled_team_names(@team_runs, @last_seen, @pid_status) |> Enum.join(", ")}
                 </span>
               </p>
             </div>
@@ -1017,9 +1282,18 @@ defmodule CortexWeb.RunDetailLive do
             if(@coordinator_alive, do: "border-green-900", else: "border-gray-800")
           ]}>
             <p class="text-xs text-gray-500 uppercase">Coordinator</p>
-            <p class={["text-lg font-bold", if(@coordinator_alive, do: "text-green-300", else: "text-gray-500")]}>
-              {if @coordinator_alive, do: "Alive", else: "Dead"}
-            </p>
+            <%= if @coordinator_alive do %>
+              <p class="text-lg font-bold text-green-300">Alive</p>
+            <% else %>
+              <p class="text-lg font-bold text-gray-500">Dead</p>
+              <button
+                :if={@run && @run.workspace_path}
+                phx-click="start_coordinator"
+                class="mt-1 text-xs text-cortex-400 hover:text-cortex-300 underline"
+              >
+                Start
+              </button>
+            <% end %>
           </div>
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-3 text-center">
             <p class="text-xs text-gray-500 uppercase">Pending</p>
@@ -1027,11 +1301,11 @@ defmodule CortexWeb.RunDetailLive do
           </div>
           <div class="bg-gray-900 rounded-lg border border-blue-900 p-3 text-center">
             <p class="text-xs text-blue-400 uppercase">Running</p>
-            <p class="text-lg font-bold text-blue-300">{count_active_running(@team_runs, @last_seen)}</p>
+            <p class="text-lg font-bold text-blue-300">{count_active_running(@team_runs, @last_seen, @pid_status)}</p>
           </div>
           <div class="bg-gray-900 rounded-lg border border-yellow-900 p-3 text-center">
             <p class="text-xs text-yellow-400 uppercase">Stalled</p>
-            <p class="text-lg font-bold text-yellow-300">{count_stalled(@team_runs, @last_seen)}</p>
+            <p class="text-lg font-bold text-yellow-300">{count_stalled(@team_runs, @last_seen, @pid_status)}</p>
           </div>
           <div class="bg-gray-900 rounded-lg border border-green-900 p-3 text-center">
             <p class="text-xs text-green-400 uppercase">Done</p>
@@ -1089,7 +1363,7 @@ defmodule CortexWeb.RunDetailLive do
             >
               <div class="flex items-center justify-between mb-2">
                 <h3 class="font-medium text-white">{team.team_name}</h3>
-                <.status_badge status={display_status(team, @last_seen)} />
+                <.status_badge status={display_status(team, @last_seen, @pid_status)} />
               </div>
               <p :if={team.role} class="text-sm text-gray-400 mb-2">{team.role}</p>
               <%= if members = Map.get(@team_members, team.team_name, []) do %>
@@ -1262,6 +1536,7 @@ defmodule CortexWeb.RunDetailLive do
                   class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                 >
                   <option value="">Select team...</option>
+                  <option value="__all__" selected={@selected_log_team == "__all__"}>All teams</option>
                   <option :for={name <- @team_names} value={name} selected={name == @selected_log_team}>
                     {name}
                   </option>
@@ -1289,7 +1564,7 @@ defmodule CortexWeb.RunDetailLive do
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
               <div class="flex items-center justify-between mb-3">
                 <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
-                  {@selected_log_team}.log
+                  {if @selected_log_team == "__all__", do: "All teams", else: "#{@selected_log_team}.log"}
                 </h2>
                 <span :if={@log_lines} class="text-xs text-gray-600">
                   {length(@log_lines)} lines (last 500)
@@ -1315,6 +1590,12 @@ defmodule CortexWeb.RunDetailLive do
                         </span>
                         <span class={["shrink-0 pt-0.5", if(expanded, do: "text-cortex-400", else: "text-gray-600")]}>
                           {if expanded, do: "v", else: ">"}
+                        </span>
+                        <span
+                          :if={line[:team]}
+                          class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium bg-cortex-900/40 text-cortex-300"
+                        >
+                          {line.team}
                         </span>
                         <span
                           :if={line.type}
@@ -1482,14 +1763,27 @@ defmodule CortexWeb.RunDetailLive do
                   </div>
 
                   <!-- End-of-log marker for incomplete sessions -->
-                  <div :if={not report.has_result} class="flex items-start gap-2 text-sm py-2 px-2 mt-2 rounded bg-red-950/30 border border-red-900/50">
-                    <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center bg-red-900/60 text-red-300">
-                      END
-                    </span>
-                    <span class="text-red-300">
-                      Log ends here — no result line received. Process died or was killed.
-                    </span>
-                  </div>
+                  <%= if not report.has_result do %>
+                    <%= if report.diagnosis == :in_progress do %>
+                      <div class="flex items-start gap-2 text-sm py-2 px-2 mt-2 rounded bg-blue-950/30 border border-blue-900/50">
+                        <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center bg-blue-900/60 text-blue-300">
+                          LIVE
+                        </span>
+                        <span class="text-blue-300">
+                          Process is still running — log continues to grow.
+                        </span>
+                      </div>
+                    <% else %>
+                      <div class="flex items-start gap-2 text-sm py-2 px-2 mt-2 rounded bg-red-950/30 border border-red-900/50">
+                        <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center bg-red-900/60 text-red-300">
+                          END
+                        </span>
+                        <span class="text-red-300">
+                          Log ends here — no result line received. Process died or was killed.
+                        </span>
+                      </div>
+                    <% end %>
+                  <% end %>
                 </div>
               <% end %>
             </div>
@@ -1629,13 +1923,14 @@ defmodule CortexWeb.RunDetailLive do
 
   # -- Stalled detection (Priority 3) --
 
-  defp has_stalled_teams?(team_runs, run_status, last_seen) do
+  defp has_stalled_teams?(team_runs, run_status, last_seen, pid_status) do
     run_status in ["running", "failed"] and
-      Enum.any?(team_runs, fn tr -> team_stalled?(tr, last_seen) end)
+      Enum.any?(team_runs, fn tr -> team_stalled?(tr, last_seen, pid_status) end)
   end
 
-  defp team_stalled?(team_run, last_seen) do
+  defp team_stalled?(team_run, last_seen, pid_status) do
     (team_run.status || "pending") == "running" and
+      not pid_alive?(team_run.team_name, pid_status) and
       case Map.get(last_seen, team_run.team_name) do
         nil ->
           # No events received this session — fall back to started_at
@@ -1649,29 +1944,34 @@ defmodule CortexWeb.RunDetailLive do
       end
   end
 
-  defp display_status(team, last_seen) do
+  # If we have a PID check result and it says alive, team is not stalled
+  defp pid_alive?(team_name, pid_status) do
+    Map.get(pid_status, team_name, false)
+  end
+
+  defp display_status(team, last_seen, pid_status \\ %{}) do
     raw = team.status || "pending"
 
-    if raw == "running" and team_stalled?(team, last_seen) do
+    if raw == "running" and team_stalled?(team, last_seen, pid_status) do
       "stalled"
     else
       raw
     end
   end
 
-  defp count_stalled(team_runs, last_seen) do
-    Enum.count(team_runs, fn tr -> team_stalled?(tr, last_seen) end)
+  defp count_stalled(team_runs, last_seen, pid_status) do
+    Enum.count(team_runs, fn tr -> team_stalled?(tr, last_seen, pid_status) end)
   end
 
-  defp count_active_running(team_runs, last_seen) do
+  defp count_active_running(team_runs, last_seen, pid_status) do
     Enum.count(team_runs, fn tr ->
-      (tr.status || "pending") == "running" and not team_stalled?(tr, last_seen)
+      (tr.status || "pending") == "running" and not team_stalled?(tr, last_seen, pid_status)
     end)
   end
 
-  defp stalled_team_names(team_runs, last_seen) do
+  defp stalled_team_names(team_runs, last_seen, pid_status) do
     team_runs
-    |> Enum.filter(fn tr -> team_stalled?(tr, last_seen) end)
+    |> Enum.filter(fn tr -> team_stalled?(tr, last_seen, pid_status) end)
     |> Enum.map(& &1.team_name)
     |> Enum.sort()
   end
@@ -1702,10 +2002,12 @@ defmodule CortexWeb.RunDetailLive do
             |> MapSet.new()
 
           existing_names = MapSet.new(team_runs, & &1.team_name)
-          completed = MapSet.new(
-            Enum.filter(team_runs, fn tr -> tr.status in ["completed", "done"] end),
-            & &1.team_name
-          )
+
+          completed =
+            MapSet.new(
+              Enum.filter(team_runs, fn tr -> tr.status in ["completed", "done"] end),
+              & &1.team_name
+            )
 
           config_names
           |> MapSet.difference(existing_names)
@@ -1765,6 +2067,26 @@ defmodule CortexWeb.RunDetailLive do
       end
     end
   end
+
+  defp read_all_team_logs(run, team_names) do
+    if run && run.workspace_path do
+      team_names
+      |> Enum.flat_map(fn name ->
+        case read_team_log(run, name) do
+          nil -> []
+          lines -> Enum.map(lines, &Map.put(&1, :team, name))
+        end
+      end)
+      |> Enum.sort_by(&extract_timestamp/1)
+      |> Enum.take(-@max_log_lines)
+      |> Enum.with_index(1)
+      |> Enum.map(fn {line, idx} -> %{line | num: idx} end)
+    end
+  end
+
+  defp extract_timestamp(%{parsed: %{"timestamp" => ts}}) when is_binary(ts), do: ts
+  defp extract_timestamp(%{parsed: %{"message" => %{"created" => ts}}}), do: ts
+  defp extract_timestamp(_), do: ""
 
   defp parse_log_line(line) do
     case Jason.decode(line) do
@@ -1853,6 +2175,19 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  # Format tool activity text: "Read config.exs" or "Bash: mix test" instead of "using Read"
+  defp format_tool_activity([], _details), do: ""
+
+  defp format_tool_activity(tools, details) do
+    tools
+    |> Enum.zip(details ++ List.duplicate(nil, max(0, length(tools) - length(details))))
+    |> Enum.map(fn
+      {tool, nil} -> tool
+      {tool, detail} -> "#{tool}: #{detail}"
+    end)
+    |> Enum.join(", ")
+  end
+
   defp activity_icon(:tool), do: ">"
   defp activity_icon(:progress), do: "*"
   defp activity_icon(:message), do: "@"
@@ -1882,7 +2217,8 @@ defmodule CortexWeb.RunDetailLive do
 
   # -- Run summary --
 
-  defp build_run_summary(run, team_runs, last_seen) do
+  defp build_run_summary(run, team_runs, last_seen, opts) do
+    include_diagnostics = Keyword.get(opts, :include_diagnostics, true)
     now = DateTime.utc_now()
     started = run.started_at
 
@@ -1933,8 +2269,8 @@ defmodule CortexWeb.RunDetailLive do
           end
 
         diag =
-          if status in ["running", "stalled"] and run.workspace_path do
-            case load_diagnostics(run, tr.team_name) do
+          if include_diagnostics and status in ["running", "stalled"] and run.workspace_path do
+            case load_diagnostics(run, tr.team_name, team_status: tr.status || "pending") do
               nil -> ""
               report -> " | #{report.diagnosis_detail}"
             end
@@ -1975,17 +2311,104 @@ defmodule CortexWeb.RunDetailLive do
 
   # -- Diagnostics helpers --
 
-  defp load_diagnostics(run, team_name) do
+  defp load_diagnostics(run, team_name, opts) do
     if run && run.workspace_path do
       log_path = Path.join([run.workspace_path, ".cortex", "logs", "#{team_name}.log"])
 
       case LogParser.parse(log_path) do
-        {:ok, report} -> report
-        {:error, _} -> nil
+        {:ok, report} ->
+          team_status = Keyword.get(opts, :team_status)
+          maybe_override_diagnosis(report, team_status)
+
+        {:error, _} ->
+          nil
       end
     end
   end
 
+  # When a team is still running, death-like diagnoses are just log snapshots, not actual failures
+  @death_diagnoses [
+    :died_after_tool_result,
+    :died_during_tool,
+    :log_ends_without_result,
+    :no_session,
+    :empty_log
+  ]
+
+  defp maybe_override_diagnosis(report, "running") when report.diagnosis in @death_diagnoses do
+    %{
+      report
+      | diagnosis: :in_progress,
+        diagnosis_detail: "Still running — log is a live snapshot"
+    }
+  end
+
+  defp maybe_override_diagnosis(report, _status), do: report
+
+  defp get_team_status(team_runs, team_name) do
+    case Enum.find(team_runs, fn tr -> tr.team_name == team_name end) do
+      nil -> "pending"
+      tr -> tr.status || "pending"
+    end
+  end
+
+  # Check all team PIDs from registry.json, returns %{team_name => true/false}
+  defp check_all_team_pids(workspace_path) do
+    registry_path = Path.join([workspace_path, ".cortex", "registry.json"])
+
+    with {:ok, content} <- File.read(registry_path),
+         {:ok, data} <- Jason.decode(content) do
+      teams = Map.get(data, "teams", [])
+
+      Map.new(teams, fn team ->
+        name = Map.get(team, "name", "")
+        pid = Map.get(team, "pid")
+
+        alive =
+          if is_integer(pid) and pid > 0 do
+            case System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true) do
+              {_, 0} -> true
+              _ -> false
+            end
+          else
+            false
+          end
+
+        {name, alive}
+      end)
+    else
+      _ -> %{}
+    end
+  rescue
+    _ -> %{}
+  end
+
+  # Check if a team's OS process is still alive by reading the PID from registry.json
+  defp team_pid_alive?(workspace_path, team_name) do
+    registry_path = Path.join([workspace_path, ".cortex", "registry.json"])
+
+    with {:ok, content} <- File.read(registry_path),
+         {:ok, data} <- Jason.decode(content) do
+      teams = Map.get(data, "teams", [])
+
+      case Enum.find(teams, fn t -> Map.get(t, "name") == team_name end) do
+        %{"pid" => pid} when is_integer(pid) and pid > 0 ->
+          case System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true) do
+            {_, 0} -> true
+            _ -> false
+          end
+
+        _ ->
+          false
+      end
+    else
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp diag_banner_class(:in_progress), do: "bg-blue-950/30 border-blue-800 text-blue-300"
   defp diag_banner_class(:completed), do: "bg-green-950/30 border-green-800 text-green-300"
   defp diag_banner_class(:max_turns), do: "bg-yellow-950/30 border-yellow-800 text-yellow-300"
   defp diag_banner_class(:empty_log), do: "bg-red-950/30 border-red-800 text-red-300"
@@ -2003,6 +2426,7 @@ defmodule CortexWeb.RunDetailLive do
 
   defp diag_banner_class(_), do: "bg-gray-900 border-gray-800 text-gray-300"
 
+  defp diag_icon(:in_progress), do: ">>"
   defp diag_icon(:completed), do: "OK"
   defp diag_icon(:max_turns), do: "!!"
   defp diag_icon(:empty_log), do: "XX"
@@ -2013,6 +2437,7 @@ defmodule CortexWeb.RunDetailLive do
   defp diag_icon(:log_ends_without_result), do: "!!"
   defp diag_icon(_), do: "??"
 
+  defp diag_title(:in_progress), do: "Still Running"
   defp diag_title(:completed), do: "Completed Successfully"
   defp diag_title(:max_turns), do: "Hit Max Turns"
   defp diag_title(:empty_log), do: "Empty Log — Never Started"
@@ -2071,7 +2496,6 @@ defmodule CortexWeb.RunDetailLive do
         "last event #{time_ago(ts)}"
     end
   end
-
 
   defp safe_store_call(fun) do
     try do

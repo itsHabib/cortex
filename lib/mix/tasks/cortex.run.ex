@@ -43,7 +43,8 @@ defmodule Mix.Tasks.Cortex.Run do
     runner_opts = [
       dry_run: Keyword.get(opts, :dry_run, false),
       continue_on_error: Keyword.get(opts, :continue_on_error, false),
-      workspace_path: Keyword.get(opts, :workspace, ".")
+      workspace_path: Keyword.get(opts, :workspace, "."),
+      coordinator: true
     ]
 
     mode = detect_mode(config_path)

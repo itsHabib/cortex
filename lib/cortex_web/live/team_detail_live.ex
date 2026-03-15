@@ -168,16 +168,18 @@ defmodule CortexWeb.TeamDetailLive do
       # Fetch fresh from DB to avoid stale changeset race with mark_failed
       updated_team_run =
         case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
-          nil -> team_run
+          nil ->
+            team_run
+
           fresh ->
             case Cortex.Store.update_team_run(fresh, %{
-              status: "running",
-              prompt: enriched_prompt,
-              started_at: DateTime.utc_now(),
-              completed_at: nil,
-              result_summary: nil,
-              session_id: nil
-            }) do
+                   status: "running",
+                   prompt: enriched_prompt,
+                   started_at: DateTime.utc_now(),
+                   completed_at: nil,
+                   result_summary: nil,
+                   session_id: nil
+                 }) do
               {:ok, updated} -> updated
               _ -> fresh
             end

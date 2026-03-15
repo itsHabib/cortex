@@ -298,7 +298,7 @@ defmodule Cortex.Orchestration.Spawner do
 
         # Keep last 2KB of output for error diagnosis
         new_collected =
-          String.slice((state.collected_output <> data), -2048, 2048)
+          String.slice(state.collected_output <> data, -2048, 2048)
 
         collect_loop(port, timer_ref, log_device, %{
           state
@@ -442,13 +442,15 @@ defmodule Cortex.Orchestration.Spawner do
   @spec extract_activity(map()) :: map() | nil
   defp extract_activity(%{"type" => "assistant", "message" => %{"content" => content}})
        when is_list(content) do
-    tools =
+    tool_blocks =
       content
       |> Enum.filter(fn block -> is_map(block) and Map.get(block, "type") == "tool_use" end)
-      |> Enum.map(fn block -> Map.get(block, "name", "unknown") end)
+
+    tools = Enum.map(tool_blocks, fn block -> Map.get(block, "name", "unknown") end)
+    details = Enum.map(tool_blocks, &tool_detail/1)
 
     if tools != [] do
-      %{type: :tool_use, tools: tools}
+      %{type: :tool_use, tools: tools, details: details}
     else
       nil
     end
@@ -458,10 +460,40 @@ defmodule Cortex.Orchestration.Spawner do
          "type" => "content_block_start",
          "content_block" => %{"type" => "tool_use", "name" => name}
        }) do
-    %{type: :tool_use, tools: [name]}
+    %{type: :tool_use, tools: [name], details: [nil]}
   end
 
   defp extract_activity(_), do: nil
+
+  # Extract a brief detail string from a tool_use content block's input
+  @spec tool_detail(map()) :: String.t() | nil
+  defp tool_detail(%{"name" => name, "input" => input}) when is_map(input) do
+    case name do
+      "Bash" -> input |> Map.get("command", "") |> truncate_detail(80)
+      "Read" -> input |> Map.get("file_path", "") |> Path.basename()
+      "Write" -> input |> Map.get("file_path", "") |> Path.basename()
+      "Edit" -> input |> Map.get("file_path", "") |> Path.basename()
+      "Grep" -> input |> Map.get("pattern", "") |> truncate_detail(50)
+      "Glob" -> input |> Map.get("pattern", "") |> truncate_detail(50)
+      "Agent" -> input |> Map.get("description", "") |> truncate_detail(50)
+      "WebSearch" -> input |> Map.get("query", "") |> truncate_detail(50)
+      "WebFetch" -> input |> Map.get("url", "") |> truncate_detail(60)
+      _ -> nil
+    end
+  end
+
+  defp tool_detail(_), do: nil
+
+  @spec truncate_detail(String.t(), pos_integer()) :: String.t() | nil
+  defp truncate_detail("", _max), do: nil
+
+  defp truncate_detail(str, max) do
+    if String.length(str) > max do
+      String.slice(str, 0, max) <> "…"
+    else
+      str
+    end
+  end
 
   @spec safe_notify_activities(function() | nil, String.t(), [map()]) :: :ok
   defp safe_notify_activities(nil, _team_name, _activities), do: :ok
