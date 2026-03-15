@@ -123,6 +123,14 @@ defmodule CortexWeb.RunListLive do
     <.header>
       Runs
       <:subtitle>All runs</:subtitle>
+      <:actions>
+        <a
+          href="/runs/compare"
+          class="inline-flex items-center rounded-md bg-gray-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-600"
+        >
+          Compare Runs
+        </a>
+      </:actions>
     </.header>
 
     <div class="mb-4 flex items-center gap-4">
