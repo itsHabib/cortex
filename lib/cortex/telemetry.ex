@@ -59,13 +59,13 @@ defmodule Cortex.Telemetry do
   @doc "Emits a `[:cortex, :agent, :started]` event."
   @spec emit_agent_started(map()) :: :ok
   def emit_agent_started(metadata) when is_map(metadata) do
-    :telemetry.execute(@agent_started, %{}, metadata)
+    :telemetry.execute(@agent_started, %{system_time: System.system_time()}, metadata)
   end
 
   @doc "Emits a `[:cortex, :agent, :stopped]` event."
   @spec emit_agent_stopped(map()) :: :ok
   def emit_agent_stopped(metadata) when is_map(metadata) do
-    :telemetry.execute(@agent_stopped, %{}, metadata)
+    :telemetry.execute(@agent_stopped, %{system_time: System.system_time()}, metadata)
   end
 
   @doc "Emits a `[:cortex, :run, :started]` event."

@@ -12,7 +12,7 @@
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "cortex_run_started_team_count_count",
+          "expr": "cortex_run_started_team_count",
           "refId": "A"
         }
       ],
@@ -27,7 +27,7 @@
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "targets": [
         {
-          "expr": "cortex_team_completed_duration_ms_count",
+          "expr": "cortex_team_completed_duration_ms",
           "refId": "A"
         }
       ],
@@ -104,7 +104,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "targets": [
         {
-          "expr": "rate(cortex_run_started_team_count_count[5m])",
+          "expr": "rate(cortex_run_started_team_count[5m])",
           "legendFormat": "runs/s",
           "refId": "A"
         }
