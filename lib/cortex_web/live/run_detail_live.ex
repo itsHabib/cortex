@@ -454,6 +454,25 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("delete_run", _params, socket) do
+    run = socket.assigns.run
+
+    if run do
+      case Cortex.Store.delete_run(run) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Run deleted")
+           |> push_navigate(to: "/runs")}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to delete run")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("form_update", params, socket) do
     {:noreply,
      assign(socket,
@@ -487,8 +506,18 @@ defmodule CortexWeb.RunDetailLive do
           <span class="ml-2 text-gray-400">
             <.duration_display ms={@run.total_duration_ms} />
           </span>
+          <span :if={@run.workspace_path} class="ml-2 text-gray-500 text-xs font-mono">
+            {@run.workspace_path}
+          </span>
         </:subtitle>
         <:actions>
+          <button
+            phx-click="delete_run"
+            data-confirm="Are you sure you want to delete this run? This cannot be undone."
+            class="text-sm text-red-400 hover:text-red-300"
+          >
+            Delete
+          </button>
           <a href="/runs" class="text-sm text-gray-400 hover:text-white">Back to Runs</a>
         </:actions>
       </.header>

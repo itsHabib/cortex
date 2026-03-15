@@ -46,6 +46,32 @@ defmodule CortexWeb.RunListLive do
     {:noreply, assign(socket, runs: runs, sort_field: field_atom, sort_dir: new_dir)}
   end
 
+  def handle_event("delete_run", %{"id" => id}, socket) do
+    case Cortex.Store.get_run(id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Run not found")}
+
+      run ->
+        case Cortex.Store.delete_run(run) do
+          {:ok, _} ->
+            runs =
+              safe_list_runs(
+                limit: @per_page,
+                offset: socket.assigns.page * @per_page,
+                status: socket.assigns.status_filter
+              )
+
+            {:noreply,
+             socket
+             |> assign(runs: runs)
+             |> put_flash(:info, "Run deleted")}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Failed to delete run")}
+        end
+    end
+  end
+
   def handle_event("next_page", _params, socket) do
     page = socket.assigns.page + 1
 
@@ -165,6 +191,7 @@ defmodule CortexWeb.RunListLive do
               >
                 Started {sort_indicator(@sort_field, @sort_dir, :inserted_at)}
               </th>
+              <th class="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody>
@@ -179,6 +206,16 @@ defmodule CortexWeb.RunListLive do
               <td class="px-4 py-3"><.token_display input={run.total_input_tokens} output={run.total_output_tokens} /></td>
               <td class="px-4 py-3"><.duration_display ms={run.total_duration_ms} /></td>
               <td class="px-4 py-3 text-sm text-gray-400">{format_time(run.started_at || run.inserted_at)}</td>
+              <td class="px-4 py-3 text-right">
+                <button
+                  phx-click="delete_run"
+                  phx-value-id={run.id}
+                  data-confirm="Are you sure you want to delete this run?"
+                  class="text-xs text-red-400/60 hover:text-red-300"
+                >
+                  Delete
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>

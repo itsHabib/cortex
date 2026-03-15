@@ -33,8 +33,8 @@ defmodule CortexWeb.NewRunLiveTest do
 
     html =
       view
-      |> element("button", "Validate")
-      |> render_click()
+      |> form("form", %{})
+      |> render_submit()
 
     assert html =~ "Please provide YAML content"
   end
@@ -42,13 +42,11 @@ defmodule CortexWeb.NewRunLiveTest do
   test "validate button shows config preview for valid YAML", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/new")
 
-    # Set YAML content via blur event
-    view |> element("textarea") |> render_blur(%{"yaml" => @valid_yaml})
-
+    # Submit the form with YAML content (phx-submit="validate")
     html =
       view
-      |> element("button", "Validate")
-      |> render_click()
+      |> form("form", %{"yaml" => @valid_yaml})
+      |> render_submit()
 
     assert html =~ "test-project"
     assert html =~ "backend"
@@ -59,9 +57,12 @@ defmodule CortexWeb.NewRunLiveTest do
   test "launch creates a run and redirects", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/new")
 
-    view |> element("textarea") |> render_blur(%{"yaml" => @valid_yaml})
-    view |> element("button", "Validate") |> render_click()
+    # First validate
+    view
+    |> form("form", %{"yaml" => @valid_yaml})
+    |> render_submit()
 
+    # Then launch (phx-click="launch" on button)
     assert {:error, {:live_redirect, %{to: "/runs/" <> _id}}} =
              view |> element("button", "Launch Run") |> render_click()
   end
