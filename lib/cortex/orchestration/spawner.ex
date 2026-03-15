@@ -283,6 +283,7 @@ defmodule Cortex.Orchestration.Spawner do
 
   @spec parse_status(String.t()) :: TeamResult.status()
   defp parse_status("success"), do: :success
+  defp parse_status("error_max_turns"), do: :success
   defp parse_status("error"), do: :error
   defp parse_status(_other), do: :error
 

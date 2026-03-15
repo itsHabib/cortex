@@ -74,6 +74,7 @@ defmodule Cortex.Orchestration.Config.Loader do
   defp build_config(raw) do
     %Config{
       name: Map.get(raw, "name", ""),
+      workspace_path: Map.get(raw, "workspace_path"),
       defaults: build_defaults(Map.get(raw, "defaults")),
       teams: build_teams(Map.get(raw, "teams"))
     }

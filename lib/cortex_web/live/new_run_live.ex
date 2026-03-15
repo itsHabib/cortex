@@ -12,6 +12,7 @@ defmodule CortexWeb.NewRunLive do
      assign(socket,
        yaml_content: "",
        file_path: "",
+       workspace_path: "",
        validation_result: nil,
        config: nil,
        tiers: [],
@@ -23,15 +24,20 @@ defmodule CortexWeb.NewRunLive do
   end
 
   @impl true
-  def handle_event("update_yaml", %{"yaml" => yaml}, socket) do
-    {:noreply, assign(socket, yaml_content: yaml, validation_result: nil, config: nil)}
+  def handle_event("form_changed", params, socket) do
+    yaml = Map.get(params, "yaml", socket.assigns.yaml_content)
+    path = Map.get(params, "path", socket.assigns.file_path)
+    workspace = Map.get(params, "workspace_path", socket.assigns.workspace_path)
+    {:noreply, assign(socket, yaml_content: yaml, file_path: path, workspace_path: workspace, validation_result: nil, config: nil)}
   end
 
-  def handle_event("update_path", %{"path" => path}, socket) do
-    {:noreply, assign(socket, file_path: path)}
-  end
+  def handle_event("validate", params, socket) do
+    # Update assigns from form params in case form_changed didn't fire
+    yaml_content = Map.get(params, "yaml", socket.assigns.yaml_content)
+    file_path = Map.get(params, "path", socket.assigns.file_path)
+    workspace_path = Map.get(params, "workspace_path", socket.assigns.workspace_path)
+    socket = assign(socket, yaml_content: yaml_content, file_path: file_path, workspace_path: workspace_path)
 
-  def handle_event("validate", _params, socket) do
     yaml = effective_yaml(socket)
 
     if yaml == "" do
@@ -47,17 +53,35 @@ defmodule CortexWeb.NewRunLive do
     else
       case Loader.load_string(yaml) do
         {:ok, config, warnings} ->
-          {tiers, edges} = build_preview_dag(config)
+          ui_ws = String.trim(workspace_path)
+          yaml_ws = config.workspace_path
 
-          {:noreply,
-           assign(socket,
-             validation_result: :ok,
-             config: config,
-             tiers: tiers,
-             edges: edges,
-             errors: [],
-             warnings: warnings
-           )}
+          has_ui = ui_ws != ""
+          has_yaml = yaml_ws != nil && yaml_ws != ""
+
+          if has_ui && has_yaml do
+            {:noreply,
+             assign(socket,
+               validation_result: :error,
+               errors: ["workspace_path is set in both YAML and the form — use only one"],
+               warnings: [],
+               config: nil,
+               tiers: [],
+               edges: []
+             )}
+          else
+            {tiers, edges} = build_preview_dag(config)
+
+            {:noreply,
+             assign(socket,
+               validation_result: :ok,
+               config: config,
+               tiers: tiers,
+               edges: edges,
+               errors: [],
+               warnings: warnings
+             )}
+          end
 
         {:error, errors} ->
           {:noreply,
@@ -76,12 +100,21 @@ defmodule CortexWeb.NewRunLive do
   def handle_event("launch", _params, socket) do
     yaml = effective_yaml(socket)
     config = socket.assigns.config
+    ui_workspace = String.trim(socket.assigns.workspace_path)
 
     if config == nil do
       {:noreply,
        socket
        |> put_flash(:error, "Please validate configuration before launching")}
     else
+      # Merge UI workspace into config (validation already ensured only one is set)
+      config =
+        if ui_workspace != "" do
+          %{config | workspace_path: ui_workspace}
+        else
+          config
+        end
+
       run_attrs = %{
         name: config.name,
         config_yaml: yaml,
@@ -118,24 +151,21 @@ defmodule CortexWeb.NewRunLive do
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- Input Column -->
-      <div>
+      <form phx-change="form_changed" phx-submit="validate">
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 mb-4">
           <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Orchestra YAML</h3>
           <textarea
-            phx-blur="update_yaml"
-            phx-value-yaml={@yaml_content}
             name="yaml"
             rows="16"
             class="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono text-gray-300 focus:ring-cortex-500 focus:border-cortex-500 resize-y"
             placeholder="Paste your orchestra.yaml content here..."
-          >{@yaml_content}</textarea>
+          ><%= @yaml_content %></textarea>
         </div>
 
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 mb-4">
           <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Or Load From File</h3>
           <input
             type="text"
-            phx-blur="update_path"
             name="path"
             value={@file_path}
             class="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono text-gray-300 focus:ring-cortex-500 focus:border-cortex-500"
@@ -143,22 +173,35 @@ defmodule CortexWeb.NewRunLive do
           />
         </div>
 
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 mb-4">
+          <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Workspace Path</h3>
+          <p class="text-xs text-gray-500 mb-2">Where agents write files. Set here OR in YAML, not both. Defaults to /tmp.</p>
+          <input
+            type="text"
+            name="workspace_path"
+            value={@workspace_path}
+            class="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono text-gray-300 focus:ring-cortex-500 focus:border-cortex-500"
+            placeholder="/path/to/project (default: /tmp)"
+          />
+        </div>
+
         <div class="flex gap-3">
           <button
-            phx-click="validate"
+            type="submit"
             class="inline-flex items-center rounded-md bg-gray-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-600"
           >
             Validate
           </button>
           <button
             :if={@validation_result == :ok}
+            type="button"
             phx-click="launch"
             class="inline-flex items-center rounded-md bg-cortex-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cortex-500"
           >
             Launch Run
           </button>
         </div>
-      </div>
+      </form>
 
       <!-- Preview Column -->
       <div>
@@ -275,6 +318,14 @@ defmodule CortexWeb.NewRunLive do
     end)
   end
 
+  defp resolve_workspace_path(config, run_id) do
+    case config.workspace_path do
+      nil -> Path.join(System.tmp_dir!(), "cortex_#{run_id}")
+      "" -> Path.join(System.tmp_dir!(), "cortex_#{run_id}")
+      path -> path
+    end
+  end
+
   defp safe_create_run(attrs) do
     Cortex.Store.create_run(attrs)
   rescue
@@ -297,9 +348,12 @@ defmodule CortexWeb.NewRunLive do
     _ -> :ok
   end
 
-  defp spawn_orchestration(run, _config) do
+  defp spawn_orchestration(run, config) do
     yaml = run.config_yaml
     run_id = run.id
+
+    # Resolve workspace: UI field > YAML config > /tmp default
+    workspace_path = resolve_workspace_path(config, run_id)
 
     Task.start(fn ->
       # Write YAML to a temp file for the runner
@@ -309,7 +363,7 @@ defmodule CortexWeb.NewRunLive do
       try do
         result =
           Cortex.Orchestration.Runner.run(tmp_path,
-            workspace_path: System.tmp_dir!() |> Path.join("cortex_#{run_id}"),
+            workspace_path: workspace_path,
             run_id: run_id
           )
 

@@ -26,12 +26,15 @@ defmodule CortexWeb.RunDetailLive do
         team_runs = safe_get_team_runs(run.id)
         {tiers, edges} = build_dag(run, team_runs)
 
+        team_members = extract_team_members(run)
+
         {:ok,
          assign(socket,
            run: run,
            team_runs: team_runs,
            tiers: tiers,
            edges: edges,
+           team_members: team_members,
            page_title: "Run: #{run.name}"
          )}
     end
@@ -128,6 +131,18 @@ defmodule CortexWeb.RunDetailLive do
               <.status_badge status={team.status || "pending"} />
             </div>
             <p :if={team.role} class="text-sm text-gray-400 mb-2">{team.role}</p>
+            <%= if members = Map.get(@team_members, team.team_name, []) do %>
+              <div :if={members != []} class="mb-2">
+                <div class="flex flex-wrap gap-1">
+                  <span
+                    :for={member <- members}
+                    class="inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400"
+                  >
+                    {member}
+                  </span>
+                </div>
+              </div>
+            <% end %>
             <div class="flex items-center gap-4 text-sm">
               <span class="text-gray-500">Tier {team.tier || 0}</span>
               <.token_display input={team.input_tokens} output={team.output_tokens} />
@@ -221,6 +236,30 @@ defmodule CortexWeb.RunDetailLive do
     |> Enum.map(fn {_tier, runs} ->
       Enum.map(runs, & &1.team_name) |> Enum.sort()
     end)
+  end
+
+  defp extract_team_members(run) do
+    if run.config_yaml do
+      case YamlElixir.read_from_string(run.config_yaml) do
+        {:ok, raw} ->
+          raw
+          |> Map.get("teams", [])
+          |> Enum.map(fn team ->
+            name = Map.get(team, "name", "")
+            members = Map.get(team, "members", []) || []
+            roles = Enum.map(members, fn m -> Map.get(m, "role", "") end)
+            {name, roles}
+          end)
+          |> Map.new()
+
+        _ ->
+          %{}
+      end
+    else
+      %{}
+    end
+  rescue
+    _ -> %{}
   end
 
   defp run_title(run), do: run.name || "Untitled Run"

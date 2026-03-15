@@ -160,12 +160,14 @@ defmodule Cortex.Orchestration.Config do
   @enforce_keys [:name, :teams]
   defstruct [
     :name,
+    :workspace_path,
     defaults: %Defaults{},
     teams: []
   ]
 
   @type t :: %__MODULE__{
           name: String.t(),
+          workspace_path: String.t() | nil,
           defaults: Defaults.t(),
           teams: [Team.t()]
         }

@@ -77,12 +77,13 @@ defmodule CortexWeb.DAGComponents do
 
   def team_node(assigns) do
     status = if assigns.team, do: assigns.team.status, else: "pending"
-    cost = if assigns.team, do: assigns.team.cost_usd, else: nil
+    input_tokens = if assigns.team, do: Map.get(assigns.team, :input_tokens), else: nil
+    output_tokens = if assigns.team, do: Map.get(assigns.team, :output_tokens), else: nil
 
     assigns =
       assigns
       |> assign(:status, status || "pending")
-      |> assign(:cost, cost)
+      |> assign(:token_label, token_label(input_tokens, output_tokens))
 
     ~H"""
     <a href={"/runs/#{@run_id}/teams/#{@name}"}>
@@ -115,7 +116,7 @@ defmodule CortexWeb.DAGComponents do
         fill={status_text_color(@status)}
         font-size="11"
       >
-        {status_label(@status)}{cost_label(@cost)}
+        {status_label(@status)}{@token_label}
       </text>
     </a>
     """
@@ -182,10 +183,14 @@ defmodule CortexWeb.DAGComponents do
 
   defp status_label(status), do: status
 
-  defp cost_label(nil), do: ""
+  defp token_label(nil, nil), do: ""
 
-  defp cost_label(cost) when is_number(cost),
-    do: " | $#{:erlang.float_to_binary(cost / 1, decimals: 4)}"
+  defp token_label(input, output) when is_integer(input) and is_integer(output) do
+    " | #{format_k(input + output)} tok"
+  end
 
-  defp cost_label(_), do: ""
+  defp token_label(_, _), do: ""
+
+  defp format_k(n) when n < 1_000, do: Integer.to_string(n)
+  defp format_k(n), do: "#{Float.round(n / 1_000, 1)}K"
 end

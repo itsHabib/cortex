@@ -313,12 +313,17 @@ defmodule Cortex.Orchestration.Runner do
           if run_id do
             team = find_team(config.teams, name)
 
+            team_prompt = Injection.build_prompt(team, config.name, state, config.defaults)
+            team_log_path = Workspace.log_path(workspace, name)
+
             Cortex.Store.create_team_run(%{
               run_id: run_id,
               team_name: name,
               role: team && team.lead && team.lead.role,
               tier: tier_index,
               status: "running",
+              prompt: team_prompt,
+              log_path: team_log_path,
               started_at: DateTime.utc_now()
             })
           end

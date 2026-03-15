@@ -245,8 +245,8 @@ defmodule CortexWeb.RunListLive do
   defp sort_indicator(current_field, dir, field) do
     if current_field == field do
       case dir do
-        :asc -> "^"
-        :desc -> "v"
+        :asc -> raw("&uarr;")
+        :desc -> raw("&darr;")
       end
     else
       ""
