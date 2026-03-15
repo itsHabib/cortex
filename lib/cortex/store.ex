@@ -104,6 +104,11 @@ defmodule Cortex.Store do
 
   # ── Event Logs ────────────────────────────────────────────────────
 
+  @doc "Deletes a run and its associated team runs and event logs."
+  def delete_run(%Run{} = run) do
+    Repo.delete(run)
+  end
+
   @doc "Logs an event to the event_logs table."
   def log_event(attrs) do
     %EventLog{}

@@ -45,7 +45,10 @@ defmodule Cortex.MixProject do
       {:benchee, "~> 1.3", only: :dev},
 
       # Phase 10: SRE / Observability
-      {:telemetry, "~> 1.2"}
+      {:telemetry, "~> 1.2"},
+      {:telemetry_metrics, "~> 1.0"},
+      {:telemetry_poller, "~> 1.0"},
+      {:telemetry_metrics_prometheus_core, "~> 1.2"}
     ]
   end
 

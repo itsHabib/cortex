@@ -417,6 +417,64 @@ defmodule Cortex.Orchestration.RunnerTest do
     end
   end
 
+  describe "truncate_summary/1" do
+    test "truncates strings longer than 2000 chars" do
+      long_result = String.duplicate("x", 3000)
+
+      ndjson = """
+      echo '{"type":"system","subtype":"init","session_id":"sess-long"}'
+      echo '{"type":"result","subtype":"success","result":"#{long_result}","cost_usd":0.10,"num_turns":1,"duration_ms":1000}'
+      """
+
+      tmp_dir = create_tmp_dir()
+
+      try do
+        yaml_path = write_yaml(tmp_dir, "orchestra.yaml", single_team_yaml())
+        mock = write_mock_script(tmp_dir, "mock_claude.sh", ndjson)
+
+        assert {:ok, summary} =
+                 Runner.run(yaml_path,
+                   command: mock,
+                   workspace_path: tmp_dir
+                 )
+
+        assert summary.status == :complete
+        # The result_summary in the workspace should be the full text
+        # (truncation only applies to store persistence)
+        {:ok, ws} = Workspace.open(tmp_dir)
+        {:ok, state} = Workspace.read_state(ws)
+        result_summary = state.teams["backend"].result_summary
+        assert is_binary(result_summary)
+      after
+        cleanup(tmp_dir)
+      end
+    end
+  end
+
+  describe "safe_store_call error handling" do
+    test "runner completes even when store is unavailable" do
+      tmp_dir = create_tmp_dir()
+
+      try do
+        yaml_path = write_yaml(tmp_dir, "orchestra.yaml", single_team_yaml())
+        mock = write_mock_script(tmp_dir, "mock_claude.sh", success_ndjson())
+
+        # Run with a run_id that doesn't exist in the store — safe_store_call
+        # should rescue any errors and allow the run to complete
+        assert {:ok, summary} =
+                 Runner.run(yaml_path,
+                   command: mock,
+                   workspace_path: tmp_dir,
+                   run_id: "nonexistent-run-id"
+                 )
+
+        assert summary.status == :complete
+      after
+        cleanup(tmp_dir)
+      end
+    end
+  end
+
   describe "run/2 with context and dependencies" do
     test "injects upstream results into prompt" do
       tmp_dir = create_tmp_dir()

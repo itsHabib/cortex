@@ -42,6 +42,67 @@ defmodule Cortex.Application do
   end
 
   defp web_children do
-    [CortexWeb.Endpoint]
+    [
+      CortexWeb.Telemetry,
+      {TelemetryMetricsPrometheus.Core, metrics: prometheus_metrics()},
+      CortexWeb.Endpoint
+    ]
+  end
+
+  defp prometheus_metrics do
+    import Telemetry.Metrics
+
+    [
+      # Run metrics
+      counter("cortex.run.started.team_count",
+        tags: [:project],
+        description: "Total runs started"
+      ),
+      distribution("cortex.run.completed.duration_ms",
+        tags: [:project, :status],
+        description: "Run duration in milliseconds",
+        reporter_options: [buckets: [1_000, 5_000, 30_000, 60_000, 300_000, 600_000]]
+      ),
+
+      # Tier metrics
+      counter("cortex.tier.completed.team_count",
+        tags: [:tier_index],
+        description: "Total tiers completed"
+      ),
+
+      # Team metrics
+      counter("cortex.team.completed.duration_ms",
+        tags: [:team_name, :status],
+        description: "Total teams completed"
+      ),
+      distribution("cortex.team.completed.cost_usd",
+        tags: [:team_name],
+        description: "Team cost in USD",
+        reporter_options: [buckets: [0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]]
+      ),
+
+      # Gossip metrics
+      distribution("cortex.gossip.exchange.duration_us",
+        description: "Gossip exchange duration in microseconds",
+        reporter_options: [buckets: [100, 500, 1_000, 5_000, 10_000, 50_000]]
+      ),
+
+      # Tool metrics
+      distribution("cortex.tool.executed.duration_ms",
+        tags: [:tool_name, :success],
+        description: "Tool execution duration",
+        reporter_options: [buckets: [10, 50, 100, 500, 1_000, 5_000]]
+      ),
+
+      # Agent metrics
+      counter("cortex.agent.started.system_time",
+        tags: [:name, :role],
+        description: "Total agents started"
+      ),
+      counter("cortex.agent.stopped.system_time",
+        tags: [:agent_id, :reason],
+        description: "Total agents stopped"
+      )
+    ]
   end
 end

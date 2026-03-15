@@ -14,6 +14,17 @@ defmodule CortexWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  scope "/health", CortexWeb do
+    pipe_through(:api)
+
+    get("/live", HealthController, :live)
+    get("/ready", HealthController, :ready)
+  end
+
+  scope "/", CortexWeb do
+    get("/metrics", MetricsController, :index)
+  end
+
   scope "/api", CortexWeb do
     pipe_through(:api)
 

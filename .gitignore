@@ -25,6 +25,11 @@ cortex-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
 # Editor and IDE files
 .elixir_ls/
 .vscode/

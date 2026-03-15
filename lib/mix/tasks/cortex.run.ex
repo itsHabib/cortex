@@ -1,8 +1,12 @@
 defmodule Mix.Tasks.Cortex.Run do
-  @shortdoc "Run a Cortex orchestration from an orchestra.yaml file"
+  @shortdoc "Run a Cortex orchestration (DAG or gossip mode)"
 
   @moduledoc """
-  Runs a multi-team orchestration defined in an orchestra.yaml file.
+  Runs a multi-agent orchestration defined in a YAML config file.
+
+  Automatically detects the mode from the config:
+  - `mode: gossip` → gossip exploration with peer agents
+  - Default (no mode) → DAG orchestration with tiered teams
 
   ## Usage
 
@@ -11,13 +15,13 @@ defmodule Mix.Tasks.Cortex.Run do
   ## Options
 
     * `--dry-run` - Show execution plan without running
-    * `--continue-on-error` - Continue to next tier even if a team fails
+    * `--continue-on-error` - Continue to next tier even if a team fails (DAG mode)
     * `--workspace` - Directory for .cortex/ workspace (default: current dir)
 
   ## Examples
 
       mix cortex.run orchestra.yaml
-      mix cortex.run project/orchestra.yaml --dry-run
+      mix cortex.run gossip.yaml --dry-run
       mix cortex.run orchestra.yaml --continue-on-error --workspace /tmp/run
 
   """
@@ -42,9 +46,57 @@ defmodule Mix.Tasks.Cortex.Run do
       workspace_path: Keyword.get(opts, :workspace, ".")
     ]
 
+    mode = detect_mode(config_path)
+
+    case mode do
+      :gossip -> run_gossip(config_path, runner_opts)
+      :dag -> run_dag(config_path, runner_opts)
+    end
+  end
+
+  # -- Mode Detection ----------------------------------------------------------
+
+  @spec detect_mode(String.t()) :: :gossip | :dag
+  defp detect_mode(config_path) do
+    case YamlElixir.read_from_file(config_path) do
+      {:ok, %{"mode" => "gossip"}} -> :gossip
+      _ -> :dag
+    end
+  end
+
+  # -- Gossip Mode -------------------------------------------------------------
+
+  defp run_gossip(config_path, opts) do
+    Mix.shell().info("\n=> Cortex Gossip Engine\n")
+
+    case Cortex.Gossip.Coordinator.run(config_path, opts) do
+      {:ok, %{status: :dry_run} = plan} ->
+        Mix.shell().info(format_gossip_dry_run(plan))
+
+      {:ok, summary} ->
+        Mix.shell().info(format_gossip_summary(summary))
+
+      {:error, reasons} when is_list(reasons) ->
+        Mix.shell().error("Gossip orchestration failed:")
+
+        Enum.each(reasons, fn reason ->
+          Mix.shell().error("  - #{reason}")
+        end)
+
+        exit({:shutdown, 1})
+
+      {:error, reason} ->
+        Mix.shell().error("Gossip orchestration failed: #{inspect(reason)}")
+        exit({:shutdown, 1})
+    end
+  end
+
+  # -- DAG Mode ----------------------------------------------------------------
+
+  defp run_dag(config_path, opts) do
     Mix.shell().info("\n=> Cortex Orchestration Engine\n")
 
-    case Cortex.Orchestration.Runner.run(config_path, runner_opts) do
+    case Cortex.Orchestration.Runner.run(config_path, opts) do
       {:ok, %{status: :dry_run} = plan} ->
         Mix.shell().info(format_dry_run(plan))
 
@@ -73,12 +125,16 @@ defmodule Mix.Tasks.Cortex.Run do
     end
   end
 
+  # -- Usage -------------------------------------------------------------------
+
   @spec raise_usage() :: no_return()
   defp raise_usage do
     Mix.raise(
       "Usage: mix cortex.run <config_path> [--dry-run] [--continue-on-error] [--workspace DIR]"
     )
   end
+
+  # -- DAG Formatting ----------------------------------------------------------
 
   @spec format_dry_run(map()) :: String.t()
   defp format_dry_run(plan) do
@@ -126,5 +182,89 @@ defmodule Mix.Tasks.Cortex.Run do
       ]
 
     Enum.join(lines, "\n")
+  end
+
+  # -- Gossip Formatting -------------------------------------------------------
+
+  @spec format_gossip_dry_run(map()) :: String.t()
+  defp format_gossip_dry_run(plan) do
+    agent_lines =
+      Enum.map(plan.agents, fn a ->
+        "    - #{a.name} (topic: #{a.topic}, model: #{a.model})"
+      end)
+
+    lines =
+      [
+        "DRY RUN (gossip mode) -- No agents will be spawned",
+        "",
+        "  Project:    #{plan.project}",
+        "  Agents:     #{plan.total_agents}",
+        "  Rounds:     #{plan.gossip_rounds}",
+        "  Topology:   #{plan.topology}",
+        "  Interval:   #{plan.exchange_interval}s",
+        ""
+      ] ++ agent_lines
+
+    Enum.join(lines, "\n")
+  end
+
+  @spec format_gossip_summary(map()) :: String.t()
+  defp format_gossip_summary(summary) do
+    status_label =
+      case summary.status do
+        :complete -> "COMPLETE"
+        :partial -> "PARTIAL"
+        _ -> "FAILED"
+      end
+
+    duration = format_duration(summary.total_duration_ms)
+
+    agent_lines =
+      Enum.map(summary.agents, fn {name, info} ->
+        cost = Map.get(info, :cost_usd) || 0.0
+        "    - #{name}: #{info.status} ($#{:erlang.float_to_binary(cost, decimals: 4)})"
+      end)
+
+    knowledge = summary.knowledge
+
+    topic_lines =
+      Enum.map(knowledge.by_topic, fn {topic, count} ->
+        "    - #{topic}: #{count} entries"
+      end)
+
+    lines =
+      [
+        "Gossip Exploration: #{summary.project}",
+        "",
+        "  Status:     #{status_label}",
+        "  Duration:   #{duration}",
+        "  Agents:     #{summary.total_agents}",
+        "  Rounds:     #{summary.gossip_rounds}",
+        "  Topology:   #{summary.topology}",
+        "  Total cost: $#{:erlang.float_to_binary(summary.total_cost, decimals: 4)}",
+        "",
+        "  Agent Results:"
+      ] ++
+        agent_lines ++
+        [
+          "",
+          "  Knowledge Collected: #{knowledge.total_entries} entries"
+        ] ++ topic_lines
+
+    Enum.join(lines, "\n")
+  end
+
+  defp format_duration(nil), do: "--"
+
+  defp format_duration(ms) when is_number(ms) do
+    seconds = div(ms, 1000)
+    minutes = div(seconds, 60)
+    remaining_seconds = rem(seconds, 60)
+
+    if minutes > 0 do
+      "#{minutes}m #{remaining_seconds}s"
+    else
+      "#{remaining_seconds}s"
+    end
   end
 end
