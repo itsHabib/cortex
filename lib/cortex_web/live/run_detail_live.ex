@@ -30,6 +30,7 @@ defmodule CortexWeb.RunDetailLive do
            last_seen: %{},
            selected_log_team: nil,
            log_lines: nil,
+           expanded_logs: MapSet.new(),
            messages_team: nil,
            team_inbox: [],
            team_outbox: []
@@ -58,6 +59,7 @@ defmodule CortexWeb.RunDetailLive do
            last_seen: %{},
            selected_log_team: nil,
            log_lines: nil,
+           expanded_logs: MapSet.new(),
            messages_team: nil,
            team_inbox: [],
            team_outbox: []
@@ -290,21 +292,34 @@ defmodule CortexWeb.RunDetailLive do
   # -- Event handlers: log team selection --
 
   def handle_event("select_log_team", %{"team" => ""}, socket) do
-    {:noreply, assign(socket, selected_log_team: nil, log_lines: nil)}
+    {:noreply, assign(socket, selected_log_team: nil, log_lines: nil, expanded_logs: MapSet.new())}
   end
 
   def handle_event("select_log_team", %{"team" => team_name}, socket) do
     log_lines = read_team_log(socket.assigns.run, team_name)
-    {:noreply, assign(socket, selected_log_team: team_name, log_lines: log_lines)}
+    {:noreply, assign(socket, selected_log_team: team_name, log_lines: log_lines, expanded_logs: MapSet.new())}
   end
 
   def handle_event("refresh_logs", _params, socket) do
     if socket.assigns.selected_log_team do
       log_lines = read_team_log(socket.assigns.run, socket.assigns.selected_log_team)
-      {:noreply, assign(socket, log_lines: log_lines)}
+      {:noreply, assign(socket, log_lines: log_lines, expanded_logs: MapSet.new())}
     else
       {:noreply, socket}
     end
+  end
+
+  def handle_event("toggle_log_line", %{"line" => line_str}, socket) do
+    line_num = String.to_integer(line_str)
+
+    expanded =
+      if MapSet.member?(socket.assigns.expanded_logs, line_num) do
+        MapSet.delete(socket.assigns.expanded_logs, line_num)
+      else
+        MapSet.put(socket.assigns.expanded_logs, line_num)
+      end
+
+    {:noreply, assign(socket, expanded_logs: expanded)}
   end
 
   # -- Event handlers: messages team selection --
@@ -783,25 +798,53 @@ defmodule CortexWeb.RunDetailLive do
               </div>
               <%= if @log_lines do %>
                 <div class="max-h-[75vh] overflow-y-auto rounded bg-gray-950 divide-y divide-gray-800/50">
-                  <div
-                    :for={line <- @log_lines}
-                    class={["flex items-start gap-3 px-3 py-2 group",
-                      if(rem(line.num, 2) == 0, do: "bg-gray-950", else: "bg-gray-900/30")
-                    ]}
-                  >
-                    <span class="text-gray-600 font-mono text-xs select-none shrink-0 w-8 text-right pt-0.5">
-                      {line.num}
-                    </span>
-                    <span
-                      :if={line.type}
-                      class={["shrink-0 rounded px-1.5 py-0.5 text-xs font-medium", log_type_class(line.type)]}
+                  <%= for line <- @log_lines do %>
+                    <% expanded = MapSet.member?(@expanded_logs, line.num) %>
+                    <div
+                      phx-click="toggle_log_line"
+                      phx-value-line={line.num}
+                      class={["px-3 py-2 cursor-pointer transition-colors",
+                        if(expanded, do: "bg-gray-800/40", else:
+                          if(rem(line.num, 2) == 0, do: "bg-gray-950 hover:bg-gray-900/50", else: "bg-gray-900/30 hover:bg-gray-900/60")
+                        )
+                      ]}
                     >
-                      {line.type}
-                    </span>
-                    <code class="text-gray-400 text-xs font-mono overflow-x-auto whitespace-nowrap block flex-1 pt-0.5">
-                      {line.raw}
-                    </code>
-                  </div>
+                      <!-- Collapsed: single line -->
+                      <div class="flex items-start gap-3">
+                        <span class="text-gray-600 font-mono text-xs select-none shrink-0 w-8 text-right pt-0.5">
+                          {line.num}
+                        </span>
+                        <span class={["shrink-0 pt-0.5", if(expanded, do: "text-cortex-400", else: "text-gray-600")]}>
+                          {if expanded, do: "v", else: ">"}
+                        </span>
+                        <span
+                          :if={line.type}
+                          class={["shrink-0 rounded px-1.5 py-0.5 text-xs font-medium", log_type_class(line.type)]}
+                        >
+                          {line.type}
+                        </span>
+                        <%= if expanded do %>
+                          <code class="text-gray-400 text-xs font-mono flex-1 pt-0.5 truncate">
+                            {line.raw}
+                          </code>
+                        <% else %>
+                          <code class="text-gray-400 text-xs font-mono overflow-x-auto whitespace-nowrap block flex-1 pt-0.5">
+                            {line.raw}
+                          </code>
+                        <% end %>
+                      </div>
+                      <!-- Expanded: parsed JSON fields -->
+                      <div :if={expanded && line.parsed} class="mt-2 ml-14 space-y-1 border-l-2 border-gray-700 pl-3">
+                        <div :for={{key, val} <- line.parsed} class="flex items-start gap-2 text-xs font-mono">
+                          <span class="text-cortex-400 shrink-0">{key}:</span>
+                          <span class="text-gray-300 whitespace-pre-wrap break-all">{format_json_value(val)}</span>
+                        </div>
+                      </div>
+                      <div :if={expanded && !line.parsed} class="mt-2 ml-14 border-l-2 border-gray-700 pl-3">
+                        <pre class="text-gray-400 text-xs font-mono whitespace-pre-wrap break-all">{line.raw}</pre>
+                      </div>
+                    </div>
+                  <% end %>
                 </div>
               <% else %>
                 <p class="text-gray-500 text-sm">No log file found for this team.</p>
@@ -1009,7 +1052,8 @@ defmodule CortexWeb.RunDetailLive do
           |> Enum.take(-@max_log_lines)
           |> Enum.with_index(1)
           |> Enum.map(fn {line, idx} ->
-            %{raw: line, type: extract_log_type(line), num: idx}
+            {type, parsed} = parse_log_line(line)
+            %{raw: line, type: type, parsed: parsed, num: idx}
           end)
 
         {:error, _} ->
@@ -1018,12 +1062,27 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  defp extract_log_type(line) do
+  defp parse_log_line(line) do
     case Jason.decode(line) do
-      {:ok, %{"type" => type}} -> type
-      _ -> nil
+      {:ok, %{"type" => type} = parsed} -> {type, parsed}
+      {:ok, parsed} when is_map(parsed) -> {nil, parsed}
+      _ -> {nil, nil}
     end
   end
+
+  defp format_json_value(val) when is_binary(val) do
+    if String.length(val) > 500 do
+      String.slice(val, 0, 500) <> "..."
+    else
+      val
+    end
+  end
+
+  defp format_json_value(val) when is_map(val) or is_list(val) do
+    Jason.encode!(val, pretty: true)
+  end
+
+  defp format_json_value(val), do: inspect(val)
 
   defp log_type_class("assistant"), do: "bg-blue-900/50 text-blue-300"
   defp log_type_class("system"), do: "bg-purple-900/50 text-purple-300"
