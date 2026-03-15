@@ -259,6 +259,214 @@ defmodule Cortex.Orchestration.Runner do
   end
 
   @doc """
+  Reconciles workspace state by scanning log files for completed sessions.
+
+  When the coordinator dies, teams may finish but their results are never
+  collected. This function reads each "running" team's log file, checks
+  for a `type: "result"` line, and patches both state.json and the DB
+  to reflect the actual outcome.
+
+  Only updates teams that are marked "running" but have no live coordinator.
+  Teams with no log file or incomplete logs are left as-is.
+
+  ## Parameters
+
+    - `run_id` — the UUID of the run to reconcile
+    - `opts` — keyword options:
+      - `:workspace_path` — override (reads from DB if not given)
+
+  ## Returns
+
+    - `{:ok, changes}` — list of `%{team: name, from: old_status, to: new_status, detail: ...}`
+    - `{:error, reason}` — on failure
+  """
+  @spec reconcile_run(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def reconcile_run(run_id, opts \\ []) do
+    run = safe_store_call(fn -> Cortex.Store.get_run(run_id) end)
+
+    cond do
+      is_nil(run) ->
+        {:error, :run_not_found}
+
+      coordinator_alive?(run_id) ->
+        {:error, :coordinator_alive}
+
+      true ->
+        workspace_path = Keyword.get(opts, :workspace_path) || run.workspace_path
+
+        if is_nil(workspace_path) do
+          {:error, :no_workspace_path}
+        else
+          do_reconcile(run_id, workspace_path)
+        end
+    end
+  end
+
+  @spec do_reconcile(String.t(), String.t()) :: {:ok, [map()]}
+  defp do_reconcile(run_id, workspace_path) do
+    workspace = %Workspace{path: Path.join(workspace_path, ".cortex")}
+    team_runs = safe_store_call(fn -> Cortex.Store.get_team_runs(run_id) end) || []
+
+    # Only reconcile teams stuck in "running"
+    running_teams =
+      Enum.filter(team_runs, fn tr -> tr.status == "running" end)
+
+    changes =
+      Enum.flat_map(running_teams, fn tr ->
+        log_path = Workspace.log_path(workspace, tr.team_name)
+
+        case Cortex.Orchestration.LogParser.parse(log_path) do
+          {:ok, report} ->
+            reconcile_team(tr, report, workspace, run_id)
+
+          {:error, _} ->
+            []
+        end
+      end)
+
+    # If all teams are now done, mark the run as completed
+    if changes != [] do
+      maybe_finalize_run(run_id)
+    end
+
+    {:ok, changes}
+  end
+
+  @spec reconcile_team(map(), map(), Workspace.t(), String.t()) :: [map()]
+  defp reconcile_team(team_run, report, workspace, run_id) do
+    cond do
+      report.has_result and report.exit_subtype == "success" ->
+        new_status = "completed"
+
+        # Update workspace state.json
+        Workspace.update_team_state(workspace, team_run.team_name,
+          status: "done",
+          result_summary: report.result_text,
+          cost_usd: report.cost_usd,
+          input_tokens: report.total_input_tokens,
+          output_tokens: report.total_output_tokens
+        )
+
+        Workspace.update_registry_entry(workspace, team_run.team_name,
+          status: "done",
+          session_id: report.session_id
+        )
+
+        # Update DB
+        safe_store_call(fn ->
+          fresh = Cortex.Store.get_team_run(run_id, team_run.team_name)
+
+          if fresh do
+            Cortex.Store.update_team_run(fresh, %{
+              status: new_status,
+              cost_usd: report.cost_usd,
+              input_tokens: report.total_input_tokens,
+              output_tokens: report.total_output_tokens,
+              session_id: report.session_id,
+              result_summary: truncate_summary(report.result_text),
+              completed_at: DateTime.utc_now()
+            })
+          end
+        end)
+
+        [
+          %{
+            team: team_run.team_name,
+            from: "running",
+            to: new_status,
+            detail: "log shows successful completion ($#{Float.round((report.cost_usd || 0) * 1.0, 4)})"
+          }
+        ]
+
+      report.has_result ->
+        new_status = "failed"
+
+        Workspace.update_team_state(workspace, team_run.team_name,
+          status: "failed",
+          result_summary: report.result_text,
+          cost_usd: report.cost_usd
+        )
+
+        Workspace.update_registry_entry(workspace, team_run.team_name,
+          status: "failed",
+          session_id: report.session_id
+        )
+
+        safe_store_call(fn ->
+          fresh = Cortex.Store.get_team_run(run_id, team_run.team_name)
+
+          if fresh do
+            Cortex.Store.update_team_run(fresh, %{
+              status: new_status,
+              cost_usd: report.cost_usd,
+              session_id: report.session_id,
+              result_summary: truncate_summary(report.result_text),
+              completed_at: DateTime.utc_now()
+            })
+          end
+        end)
+
+        [
+          %{
+            team: team_run.team_name,
+            from: "running",
+            to: new_status,
+            detail: "log shows exit: #{report.diagnosis_detail}"
+          }
+        ]
+
+      report.line_count > 0 and report.diagnosis != :empty_log ->
+        # Log exists but no result line — process died mid-execution
+        # Don't change status, just report what we found
+        [
+          %{
+            team: team_run.team_name,
+            from: "running",
+            to: "running",
+            detail: "no result line — #{report.diagnosis_detail} (#{report.line_count} log lines)"
+          }
+        ]
+
+      true ->
+        []
+    end
+  end
+
+  @spec maybe_finalize_run(String.t()) :: :ok
+  defp maybe_finalize_run(run_id) do
+    safe_store_call(fn ->
+      team_runs = Cortex.Store.get_team_runs(run_id)
+
+      all_done =
+        Enum.all?(team_runs, fn tr ->
+          tr.status in ["completed", "done", "failed"]
+        end)
+
+      if all_done do
+        run = Cortex.Store.get_run(run_id)
+
+        if run && run.status == "running" do
+          total_cost = team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
+          total_input = team_runs |> Enum.map(&(&1.input_tokens || 0)) |> Enum.sum()
+          total_output = team_runs |> Enum.map(&(&1.output_tokens || 0)) |> Enum.sum()
+
+          has_failures = Enum.any?(team_runs, &(&1.status == "failed"))
+
+          Cortex.Store.update_run(run, %{
+            status: if(has_failures, do: "failed", else: "completed"),
+            total_cost_usd: total_cost,
+            total_input_tokens: total_input,
+            total_output_tokens: total_output,
+            completed_at: DateTime.utc_now()
+          })
+        end
+      end
+    end)
+
+    :ok
+  end
+
+  @doc """
   Continues a run that was interrupted (e.g., Runner process died, terminal closed).
 
   Reads the run's config_yaml from the DB, rebuilds the DAG, identifies which

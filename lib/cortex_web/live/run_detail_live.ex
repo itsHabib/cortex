@@ -746,6 +746,84 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("reconcile_run", _params, socket) do
+    run = socket.assigns.run
+
+    if run do
+      entry = %{
+        team: "system",
+        text: "Reconciling state — scanning logs for completed sessions...",
+        kind: :resume,
+        at: format_now()
+      }
+
+      socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
+
+      case Cortex.Orchestration.Runner.reconcile_run(run.id) do
+        {:ok, changes} when changes != [] ->
+          entries =
+            Enum.map(changes, fn change ->
+              %{
+                team: change.team,
+                text: "#{change.from} -> #{change.to}: #{change.detail}",
+                kind: :resume,
+                at: format_now()
+              }
+            end)
+
+          activities =
+            Enum.reduce(entries, socket.assigns.activities, fn e, acc ->
+              prepend_activity(acc, e)
+            end)
+
+          done_entry = %{
+            team: "system",
+            text: "Reconciled #{length(changes)} team(s)",
+            kind: :resume,
+            at: format_now()
+          }
+
+          # Re-fetch from DB to reflect changes
+          team_runs = safe_get_team_runs(run.id)
+          fresh_run = safe_get_run(run.id)
+          {tiers, edges} = build_dag(fresh_run || run, team_runs)
+
+          {:noreply,
+           assign(socket,
+             activities: prepend_activity(activities, done_entry),
+             team_runs: team_runs,
+             run: fresh_run || run,
+             tiers: tiers,
+             edges: edges
+           )}
+
+        {:ok, []} ->
+          no_change = %{
+            team: "system",
+            text: "No changes — no completed sessions found in logs",
+            kind: :resume,
+            at: format_now()
+          }
+
+          {:noreply,
+           assign(socket, activities: prepend_activity(socket.assigns.activities, no_change))}
+
+        {:error, reason} ->
+          err_entry = %{
+            team: "system",
+            text: "Reconcile failed: #{inspect(reason)}",
+            kind: :resume,
+            at: format_now()
+          }
+
+          {:noreply,
+           assign(socket, activities: prepend_activity(socket.assigns.activities, err_entry))}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("continue_run", _params, socket) do
     run = socket.assigns.run
 
@@ -894,12 +972,20 @@ defmodule CortexWeb.RunDetailLive do
                 Remaining: <span class="font-mono">{Enum.join(incomplete, ", ")}</span>
               </p>
             </div>
-            <button
-              phx-click="continue_run"
-              class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 shrink-0"
-            >
-              Continue Run
-            </button>
+            <div class="flex gap-2 shrink-0">
+              <button
+                phx-click="reconcile_run"
+                class="rounded bg-gray-600 px-4 py-2 text-sm font-medium text-white hover:bg-gray-500"
+              >
+                Reconcile State
+              </button>
+              <button
+                phx-click="continue_run"
+                class="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
+              >
+                Continue Run
+              </button>
+            </div>
           </div>
         </div>
       <% end %>
