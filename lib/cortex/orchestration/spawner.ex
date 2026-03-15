@@ -229,7 +229,7 @@ defmodule Cortex.Orchestration.Spawner do
     # Ensure parent directory exists
     path |> Path.dirname() |> File.mkdir_p!()
 
-    case File.open(path, [:write, :binary]) do
+    case File.open(path, [:append, :binary]) do
       {:ok, device} ->
         device
 
