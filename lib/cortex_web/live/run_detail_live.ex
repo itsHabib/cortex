@@ -3,9 +3,14 @@ defmodule CortexWeb.RunDetailLive do
 
   import CortexWeb.DAGComponents
 
+  alias Cortex.Messaging.InboxBridge
+  alias Cortex.Orchestration.Config.Loader, as: ConfigLoader
   alias Cortex.Orchestration.DAG
-
+  alias Cortex.Orchestration.Injection
   alias Cortex.Orchestration.LogParser
+  alias Cortex.Orchestration.Runner
+  alias Cortex.Orchestration.Spawner
+  alias Cortex.Orchestration.Workspace
 
   @max_activities 150
   @stale_threshold_seconds 300
@@ -51,7 +56,7 @@ defmodule CortexWeb.RunDetailLive do
         team_names = Enum.map(team_runs, & &1.team_name)
 
         coordinator_alive =
-          Cortex.Orchestration.Runner.coordinator_alive?(run.id)
+          Runner.coordinator_alive?(run.id)
 
         {:ok,
          assign(socket,
@@ -81,12 +86,7 @@ defmodule CortexWeb.RunDetailLive do
            run_summary: nil,
            pid_status: %{}
          )}
-        |> tap(fn _ ->
-          # Start periodic PID health check if run is active
-          if run.status in ["running", "failed"] and connected?(socket) do
-            send(self(), :check_pids)
-          end
-        end)
+        |> tap(fn _ -> maybe_start_pid_check(run, socket) end)
     end
   end
 
@@ -112,7 +112,7 @@ defmodule CortexWeb.RunDetailLive do
         {tiers, edges} = build_dag(updated_run || run, team_runs)
 
         coordinator_alive =
-          Cortex.Orchestration.Runner.coordinator_alive?(run.id)
+          Runner.coordinator_alive?(run.id)
 
         # Auto-generate summary on tier/run completion (with full diagnostics)
         run_summary =
@@ -145,14 +145,7 @@ defmodule CortexWeb.RunDetailLive do
       team_name = payload.team_name
       last_seen = Map.put(socket.assigns.last_seen, team_name, DateTime.utc_now())
 
-      team_runs =
-        Enum.map(socket.assigns.team_runs, fn tr ->
-          if tr.team_name == team_name do
-            %{tr | input_tokens: payload.input_tokens, output_tokens: payload.output_tokens}
-          else
-            tr
-          end
-        end)
+      team_runs = update_team_tokens(socket.assigns.team_runs, team_name, payload)
 
       total_input =
         team_runs |> Enum.map(& &1.input_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
@@ -518,12 +511,17 @@ defmodule CortexWeb.RunDetailLive do
 
   def handle_event("send_message", %{"to" => to, "content" => content}, socket) do
     run = socket.assigns.run
+    workspace_path = run && run.workspace_path
 
-    if run && to != "" && content != "" do
-      workspace_path = run.workspace_path
+    cond do
+      not (run && to != "" && content != "") ->
+        {:noreply, socket}
 
-      if workspace_path do
-        Cortex.Orchestration.Runner.send_message(workspace_path, "coordinator", to, content)
+      not workspace_path ->
+        {:noreply, put_flash(socket, :error, "No workspace path -- cannot send messages")}
+
+      true ->
+        Runner.send_message(workspace_path, "coordinator", to, content)
 
         entry = %{
           team: "coordinator",
@@ -534,27 +532,15 @@ defmodule CortexWeb.RunDetailLive do
 
         activities = prepend_activity(socket.assigns.activities, entry)
 
-        # Refresh messages if viewing this team
         socket =
           if socket.assigns.messages_team == to do
             {inbox, outbox} = read_team_messages(run, to)
-
-            assign(socket,
-              activities: activities,
-              msg_content: "",
-              team_inbox: inbox,
-              team_outbox: outbox
-            )
+            assign(socket, activities: activities, msg_content: "", team_inbox: inbox, team_outbox: outbox)
           else
             assign(socket, activities: activities, msg_content: "")
           end
 
         {:noreply, socket |> put_flash(:info, "Message sent to #{to}")}
-      else
-        {:noreply, put_flash(socket, :error, "No workspace path -- cannot send messages")}
-      end
-    else
-      {:noreply, socket}
     end
   end
 
@@ -567,10 +553,7 @@ defmodule CortexWeb.RunDetailLive do
     workspace_path = run.workspace_path || non_empty(socket.assigns.resume_workspace_path)
 
     if run && workspace_path do
-      # Persist workspace_path to run if it was manually entered
-      if run.workspace_path == nil do
-        safe_update_workspace(run, workspace_path)
-      end
+      if run.workspace_path == nil, do: safe_update_workspace(run, workspace_path)
 
       entry = %{
         team: "system",
@@ -580,39 +563,7 @@ defmodule CortexWeb.RunDetailLive do
       }
 
       socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
-
-      # Capture run.id for closure
-      run_id = run.id
-
-      # Run resume in a background task so LiveView stays responsive
-      Task.start(fn ->
-        case Cortex.Orchestration.Runner.resume_run(workspace_path) do
-          {:ok, results} ->
-            # Broadcast per-team results
-            Enum.each(results, fn {team_name, result} ->
-              {status, reason} = classify_resume_result(result)
-
-              Cortex.Events.broadcast(:team_resume_result, %{
-                run_id: run_id,
-                team_name: team_name,
-                status: status,
-                reason: reason
-              })
-            end)
-
-            # Signal all resumes done
-            Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
-
-          {:error, reason} ->
-            Cortex.Events.broadcast(:team_resume_result, %{
-              run_id: run_id,
-              team_name: "system",
-              status: :failure,
-              reason: inspect(reason)
-            })
-        end
-      end)
-
+      spawn_resume_all_task(run.id, workspace_path)
       {:noreply, put_flash(socket, :info, "Resuming stalled teams...")}
     else
       {:noreply, put_flash(socket, :error, "No workspace path -- cannot resume")}
@@ -624,9 +575,7 @@ defmodule CortexWeb.RunDetailLive do
     workspace_path = run.workspace_path || non_empty(socket.assigns.resume_workspace_path)
 
     if run && workspace_path do
-      if run.workspace_path == nil do
-        safe_update_workspace(run, workspace_path)
-      end
+      if run.workspace_path == nil, do: safe_update_workspace(run, workspace_path)
 
       entry = %{
         team: "system",
@@ -636,47 +585,7 @@ defmodule CortexWeb.RunDetailLive do
       }
 
       socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
-      run_id = run.id
-
-      Task.start(fn ->
-        # Build a minimal workspace to find session_id and resume just this team
-        cortex_path = Path.join(workspace_path, ".cortex")
-        log_path = Path.join([cortex_path, "logs", "#{team_name}.log"])
-
-        session_id =
-          case Cortex.Orchestration.Spawner.extract_session_id_from_log(log_path) do
-            {:ok, sid} -> sid
-            :error -> nil
-          end
-
-        {status, reason} =
-          if session_id do
-            case Cortex.Orchestration.Spawner.resume(
-                   team_name: team_name,
-                   session_id: session_id,
-                   timeout_minutes: 30,
-                   log_path: log_path,
-                   command: "claude",
-                   cwd: workspace_path
-                 ) do
-              {:ok, %{status: :success}} -> {:success, "session resumed successfully"}
-              {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
-              {:error, reason} -> {:failure, inspect(reason)}
-            end
-          else
-            {:no_session_id, "no session_id found in logs"}
-          end
-
-        Cortex.Events.broadcast(:team_resume_result, %{
-          run_id: run_id,
-          team_name: team_name,
-          status: status,
-          reason: reason
-        })
-
-        Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
-      end)
-
+      spawn_resume_single_task(run.id, team_name, workspace_path)
       {:noreply, put_flash(socket, :info, "Resuming #{team_name}...")}
     else
       {:noreply, put_flash(socket, :error, "No workspace path — cannot resume")}
@@ -686,10 +595,13 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("restart_team", %{"team" => team_name}, socket) do
     run = socket.assigns.run
     workspace_path = run && run.workspace_path
+    team_run = Enum.find(socket.assigns.team_runs, &(&1.team_name == team_name))
 
-    if run && workspace_path do
-      # Safety check: is the team's OS process still alive?
-      if team_pid_alive?(workspace_path, team_name) do
+    cond do
+      not (run && workspace_path) ->
+        {:noreply, put_flash(socket, :error, "No workspace path — cannot restart")}
+
+      team_pid_alive?(workspace_path, team_name) ->
         {:noreply,
          put_flash(
            socket,
@@ -697,147 +609,12 @@ defmodule CortexWeb.RunDetailLive do
            "#{team_name} process is still alive (PID running). " <>
              "Wait for it to finish or kill it manually before restarting."
          )}
-      else
-        # Get original prompt from DB
-        team_run = Enum.find(socket.assigns.team_runs, &(&1.team_name == team_name))
 
-        if team_run && team_run.prompt do
-          run_id = run.id
-          team_run_id = team_run.id
+      not (team_run && team_run.prompt) ->
+        {:noreply, put_flash(socket, :error, "No prompt found for #{team_name}")}
 
-          # Build restart context from logs
-          log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
-
-          restart_context =
-            case Cortex.Orchestration.LogParser.parse(log_path) do
-              {:ok, report} -> Cortex.Orchestration.LogParser.build_restart_context(report)
-              _ -> ""
-            end
-
-          enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
-
-          # Mark as running + update prompt in DB (synchronous — before Task.start)
-          safe_store_call(fn ->
-            case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
-              nil ->
-                :ok
-
-              tr ->
-                Cortex.Store.update_team_run(tr, %{
-                  status: "running",
-                  prompt: enriched_prompt,
-                  started_at: DateTime.utc_now(),
-                  completed_at: nil,
-                  result_summary: nil,
-                  session_id: nil
-                })
-            end
-          end)
-
-          # Re-fetch team_runs so the UI immediately shows "running" (not stale "failed")
-          team_runs = safe_get_team_runs(run.id)
-
-          entry = %{
-            team: "system",
-            text: "Restarting #{team_name} with fresh session (previous session expired)...",
-            kind: :resume,
-            at: format_now()
-          }
-
-          socket =
-            socket
-            |> assign(team_runs: team_runs)
-            |> assign(activities: prepend_activity(socket.assigns.activities, entry))
-
-          Task.start(fn ->
-            result =
-              Cortex.Orchestration.Spawner.spawn(
-                team_name: team_name,
-                prompt: enriched_prompt,
-                model: "sonnet",
-                max_turns: 200,
-                permission_mode: "bypassPermissions",
-                timeout_minutes: 45,
-                log_path: log_path,
-                command: "claude",
-                cwd: workspace_path
-              )
-
-            # Persist result to DB
-            safe_store_call(fn ->
-              case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
-                nil ->
-                  :ok
-
-                tr ->
-                  attrs =
-                    case result do
-                      {:ok, %{status: :success} = r} ->
-                        %{
-                          status: "completed",
-                          session_id: r.session_id,
-                          cost_usd: r.cost_usd,
-                          input_tokens: r.input_tokens,
-                          output_tokens: r.output_tokens,
-                          cache_read_tokens: r.cache_read_tokens,
-                          cache_creation_tokens: r.cache_creation_tokens,
-                          duration_ms: r.duration_ms,
-                          num_turns: r.num_turns,
-                          result_summary: truncate_for_store(r.result),
-                          completed_at: DateTime.utc_now()
-                        }
-
-                      {:ok, r} ->
-                        %{
-                          status: "failed",
-                          session_id: r.session_id,
-                          cost_usd: r.cost_usd,
-                          input_tokens: r.input_tokens,
-                          output_tokens: r.output_tokens,
-                          duration_ms: r.duration_ms,
-                          result_summary: truncate_for_store(r.result),
-                          completed_at: DateTime.utc_now()
-                        }
-
-                      {:error, reason} ->
-                        %{
-                          status: "failed",
-                          result_summary: "Restart error: #{inspect(reason)}",
-                          completed_at: DateTime.utc_now()
-                        }
-                    end
-
-                  Cortex.Store.update_team_run(tr, attrs)
-              end
-            end)
-
-            {status, reason} =
-              case result do
-                {:ok, %{status: :success}} -> {:success, "restarted and completed successfully"}
-                {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
-                {:ok, %{status: status}} -> {:failure, "finished with status: #{status}"}
-                {:error, reason} -> {:failure, inspect(reason)}
-              end
-
-            Cortex.Events.broadcast(:team_resume_result, %{
-              run_id: run_id,
-              team_name: team_name,
-              status: status,
-              reason: reason
-            })
-
-            Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
-          end)
-
-          {:noreply, put_flash(socket, :info, "Restarting #{team_name} with fresh session...")}
-        else
-          {:noreply, put_flash(socket, :error, "No prompt found for #{team_name}")}
-        end
-      end
-
-      # close pid_alive? else
-    else
-      {:noreply, put_flash(socket, :error, "No workspace path — cannot restart")}
+      true ->
+        do_restart_team(socket, run, team_name, team_run, workspace_path)
     end
   end
 
@@ -872,67 +649,7 @@ defmodule CortexWeb.RunDetailLive do
       }
 
       socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
-
-      case Cortex.Orchestration.Runner.reconcile_run(run.id) do
-        {:ok, changes} when changes != [] ->
-          entries =
-            Enum.map(changes, fn change ->
-              %{
-                team: change.team,
-                text: "#{change.from} -> #{change.to}: #{change.detail}",
-                kind: :resume,
-                at: format_now()
-              }
-            end)
-
-          activities =
-            Enum.reduce(entries, socket.assigns.activities, fn e, acc ->
-              prepend_activity(acc, e)
-            end)
-
-          done_entry = %{
-            team: "system",
-            text: "Reconciled #{length(changes)} team(s)",
-            kind: :resume,
-            at: format_now()
-          }
-
-          # Re-fetch from DB to reflect changes
-          team_runs = safe_get_team_runs(run.id)
-          fresh_run = safe_get_run(run.id)
-          {tiers, edges} = build_dag(fresh_run || run, team_runs)
-
-          {:noreply,
-           assign(socket,
-             activities: prepend_activity(activities, done_entry),
-             team_runs: team_runs,
-             run: fresh_run || run,
-             tiers: tiers,
-             edges: edges
-           )}
-
-        {:ok, []} ->
-          no_change = %{
-            team: "system",
-            text: "No changes — no completed sessions found in logs",
-            kind: :resume,
-            at: format_now()
-          }
-
-          {:noreply,
-           assign(socket, activities: prepend_activity(socket.assigns.activities, no_change))}
-
-        {:error, reason} ->
-          err_entry = %{
-            team: "system",
-            text: "Reconcile failed: #{inspect(reason)}",
-            kind: :resume,
-            at: format_now()
-          }
-
-          {:noreply,
-           assign(socket, activities: prepend_activity(socket.assigns.activities, err_entry))}
-      end
+      handle_reconcile_result(socket, run, Runner.reconcile_run(run.id))
     else
       {:noreply, socket}
     end
@@ -953,29 +670,7 @@ defmodule CortexWeb.RunDetailLive do
 
       socket = assign(socket, activities: prepend_activity(socket.assigns.activities, entry))
 
-      Task.start(fn ->
-        case Cortex.Orchestration.Runner.continue_run(run_id) do
-          {:ok, _summary} ->
-            Cortex.Events.broadcast(:team_resume_result, %{
-              run_id: run_id,
-              team_name: "system",
-              status: :success,
-              reason: "run continued successfully"
-            })
-
-            Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
-
-          {:error, reason} ->
-            Cortex.Events.broadcast(:team_resume_result, %{
-              run_id: run_id,
-              team_name: "system",
-              status: :failure,
-              reason: "continue failed: #{inspect(reason)}"
-            })
-
-            Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
-        end
-      end)
+      spawn_continue_run_task(run_id)
 
       {:noreply, put_flash(socket, :info, "Continuing run — remaining teams will be spawned...")}
     else
@@ -987,149 +682,11 @@ defmodule CortexWeb.RunDetailLive do
     run = socket.assigns.run
 
     if run && run.workspace_path && run.config_yaml do
-      # Build coordinator prompt from stored config
-      case Cortex.Orchestration.Config.Loader.load_string(run.config_yaml) do
-        {:ok, config, _warnings} ->
-          case Cortex.Orchestration.DAG.build_tiers(config.teams) do
-            {:ok, tiers} ->
-              workspace_path = run.workspace_path
-              cortex_path = Path.join(workspace_path, ".cortex")
-
-              # Set up coordinator inbox
-              Cortex.Messaging.InboxBridge.setup(workspace_path, ["coordinator"])
-
-              prompt =
-                Cortex.Orchestration.Injection.build_coordinator_prompt(
-                  config,
-                  tiers,
-                  cortex_path
-                )
-
-              log_path = Path.join([cortex_path, "logs", "coordinator.log"])
-
-              entry = %{
-                team: "system",
-                text: "Starting coordinator agent...",
-                kind: :resume,
-                at: format_now()
-              }
-
-              run_id = run.id
-
-              on_activity = fn name, activity ->
-                Cortex.Events.broadcast(:team_activity, %{
-                  run_id: run_id,
-                  team_name: name,
-                  type: activity.type,
-                  tools: Map.get(activity, :tools, []),
-                  details: Map.get(activity, :details, []),
-                  timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-                })
-              end
-
-              on_token_update = fn name, tokens ->
-                Cortex.Events.broadcast(:team_tokens_updated, %{
-                  run_id: run_id,
-                  team_name: name,
-                  input_tokens: tokens.input_tokens,
-                  output_tokens: tokens.output_tokens,
-                  cache_read_tokens: tokens.cache_read_tokens,
-                  cache_creation_tokens: tokens.cache_creation_tokens
-                })
-              end
-
-              # Store PID in registry.json so health checks pick it up
-              workspace = %Cortex.Orchestration.Workspace{path: cortex_path}
-
-              on_port_opened = fn _name, os_pid ->
-                if os_pid do
-                  Cortex.Orchestration.Workspace.update_registry_entry(
-                    workspace,
-                    "coordinator",
-                    pid: os_pid,
-                    status: "running",
-                    started_at: DateTime.utc_now() |> DateTime.to_iso8601()
-                  )
-                end
-              end
-
-              # Create DB record for the coordinator
-              safe_store_call(fn ->
-                Cortex.Store.create_team_run(%{
-                  run_id: run_id,
-                  team_name: "coordinator",
-                  role: "Runtime Coordinator",
-                  tier: -1,
-                  status: "running",
-                  prompt: prompt,
-                  log_path: log_path,
-                  started_at: DateTime.utc_now()
-                })
-              end)
-
-              Task.start(fn ->
-                result =
-                  Cortex.Orchestration.Spawner.spawn(
-                    team_name: "coordinator",
-                    prompt: prompt,
-                    model: "haiku",
-                    max_turns: 500,
-                    permission_mode: "bypassPermissions",
-                    timeout_minutes: 120,
-                    log_path: log_path,
-                    command: "claude",
-                    cwd: workspace_path,
-                    on_activity: on_activity,
-                    on_token_update: on_token_update,
-                    on_port_opened: on_port_opened
-                  )
-
-                # Update DB with final result
-                safe_store_call(fn ->
-                  case Cortex.Store.get_team_runs(run_id) do
-                    team_runs when is_list(team_runs) ->
-                      case Enum.find(team_runs, &(&1.team_name == "coordinator")) do
-                        nil ->
-                          :ok
-
-                        tr ->
-                          attrs =
-                            case result do
-                              {:ok, r} ->
-                                %{
-                                  status:
-                                    if(r.status == :success, do: "completed", else: "failed"),
-                                  session_id: r.session_id,
-                                  cost_usd: r.cost_usd,
-                                  input_tokens: r.input_tokens,
-                                  output_tokens: r.output_tokens,
-                                  completed_at: DateTime.utc_now()
-                                }
-
-                              {:error, _} ->
-                                %{status: "failed", completed_at: DateTime.utc_now()}
-                            end
-
-                          Cortex.Store.update_team_run(tr, attrs)
-                      end
-
-                    _ ->
-                      :ok
-                  end
-                end)
-              end)
-
-              {:noreply,
-               socket
-               |> assign(activities: prepend_activity(socket.assigns.activities, entry))
-               |> put_flash(:info, "Coordinator agent started")}
-
-            _ ->
-              {:noreply, put_flash(socket, :error, "Failed to build DAG from config")}
-          end
-
-        _ ->
-          {:noreply, put_flash(socket, :error, "Failed to parse run config")}
+      with {:ok, config, _warnings} <- ConfigLoader.load_string(run.config_yaml),
+           {:ok, tiers} <- DAG.build_tiers(config.teams) do
+        do_start_coordinator(socket, run, config, tiers)
+      else
+        _ -> {:noreply, put_flash(socket, :error, "Failed to parse config or build DAG")}
       end
     else
       {:noreply, put_flash(socket, :error, "No workspace path or config available")}
@@ -1808,6 +1365,356 @@ defmodule CortexWeb.RunDetailLive do
 
   # -- Private helpers --
 
+  # Extracted from handle_event("restart_team") to reduce cyclomatic complexity
+  defp do_restart_team(socket, run, team_name, team_run, workspace_path) do
+    log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+
+    restart_context =
+      case LogParser.parse(log_path) do
+        {:ok, report} -> LogParser.build_restart_context(report)
+        _ -> ""
+      end
+
+    enriched_prompt = team_run.prompt <> "\n\n" <> restart_context
+
+    # Mark as running in DB (synchronous — before Task.start)
+    mark_team_run_running(team_run.id, enriched_prompt)
+
+    team_runs = safe_get_team_runs(run.id)
+
+    entry = %{
+      team: "system",
+      text: "Restarting #{team_name} with fresh session (previous session expired)...",
+      kind: :resume,
+      at: format_now()
+    }
+
+    socket =
+      socket
+      |> assign(team_runs: team_runs)
+      |> assign(activities: prepend_activity(socket.assigns.activities, entry))
+
+    spawn_restart_task(run.id, team_run.id, team_name, enriched_prompt, log_path, workspace_path)
+
+    {:noreply, put_flash(socket, :info, "Restarting #{team_name} with fresh session...")}
+  end
+
+  defp mark_team_run_running(team_run_id, prompt) do
+    safe_store_call(fn ->
+      case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
+        nil -> :ok
+        tr ->
+          Cortex.Store.update_team_run(tr, %{
+            status: "running",
+            prompt: prompt,
+            started_at: DateTime.utc_now(),
+            completed_at: nil,
+            result_summary: nil,
+            session_id: nil
+          })
+      end
+    end)
+  end
+
+  defp spawn_restart_task(run_id, team_run_id, team_name, prompt, log_path, workspace_path) do
+    Task.start(fn ->
+      result =
+        Spawner.spawn(
+          team_name: team_name,
+          prompt: prompt,
+          model: "sonnet",
+          max_turns: 200,
+          permission_mode: "bypassPermissions",
+          timeout_minutes: 45,
+          log_path: log_path,
+          command: "claude",
+          cwd: workspace_path
+        )
+
+      persist_spawn_result(team_run_id, result)
+      broadcast_spawn_result(run_id, team_name, result)
+    end)
+  end
+
+  defp persist_spawn_result(team_run_id, result) do
+    safe_store_call(fn ->
+      case Cortex.Repo.get(Cortex.Store.Schemas.TeamRun, team_run_id) do
+        nil -> :ok
+        tr -> Cortex.Store.update_team_run(tr, spawn_result_to_attrs(result))
+      end
+    end)
+  end
+
+  defp spawn_result_to_attrs({:ok, %{status: :success} = r}) do
+    %{
+      status: "completed",
+      session_id: r.session_id,
+      cost_usd: r.cost_usd,
+      input_tokens: r.input_tokens,
+      output_tokens: r.output_tokens,
+      cache_read_tokens: r.cache_read_tokens,
+      cache_creation_tokens: r.cache_creation_tokens,
+      duration_ms: r.duration_ms,
+      num_turns: r.num_turns,
+      result_summary: truncate_for_store(r.result),
+      completed_at: DateTime.utc_now()
+    }
+  end
+
+  defp spawn_result_to_attrs({:ok, r}) do
+    %{
+      status: "failed",
+      session_id: r.session_id,
+      cost_usd: r.cost_usd,
+      input_tokens: r.input_tokens,
+      output_tokens: r.output_tokens,
+      duration_ms: r.duration_ms,
+      result_summary: truncate_for_store(r.result),
+      completed_at: DateTime.utc_now()
+    }
+  end
+
+  defp spawn_result_to_attrs({:error, reason}) do
+    %{
+      status: "failed",
+      result_summary: "Restart error: #{inspect(reason)}",
+      completed_at: DateTime.utc_now()
+    }
+  end
+
+  defp broadcast_spawn_result(run_id, team_name, result) do
+    {status, reason} =
+      case result do
+        {:ok, %{status: :success}} -> {:success, "restarted and completed successfully"}
+        {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
+        {:ok, %{status: s}} -> {:failure, "finished with status: #{s}"}
+        {:error, reason} -> {:failure, inspect(reason)}
+      end
+
+    Cortex.Events.broadcast(:team_resume_result, %{
+      run_id: run_id,
+      team_name: team_name,
+      status: status,
+      reason: reason
+    })
+
+    Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+  end
+
+  defp spawn_continue_run_task(run_id) do
+    Task.start(fn ->
+      {status, reason} =
+        case Runner.continue_run(run_id) do
+          {:ok, _summary} -> {:success, "run continued successfully"}
+          {:error, reason} -> {:failure, "continue failed: #{inspect(reason)}"}
+        end
+
+      Cortex.Events.broadcast(:team_resume_result, %{
+        run_id: run_id,
+        team_name: "system",
+        status: status,
+        reason: reason
+      })
+
+      Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+    end)
+  end
+
+  defp spawn_resume_all_task(run_id, workspace_path) do
+    Task.start(fn -> do_resume_all(run_id, workspace_path) end)
+  end
+
+  defp do_resume_all(run_id, workspace_path) do
+    case Runner.resume_run(workspace_path) do
+      {:ok, results} ->
+        Enum.each(results, fn {team_name, result} ->
+          {status, reason} = classify_resume_result(result)
+
+          Cortex.Events.broadcast(:team_resume_result, %{
+            run_id: run_id,
+            team_name: team_name,
+            status: status,
+            reason: reason
+          })
+        end)
+
+        Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+
+      {:error, reason} ->
+        Cortex.Events.broadcast(:team_resume_result, %{
+          run_id: run_id,
+          team_name: "system",
+          status: :failure,
+          reason: inspect(reason)
+        })
+    end
+  end
+
+  defp spawn_resume_single_task(run_id, team_name, workspace_path) do
+    Task.start(fn ->
+      log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+
+      {status, reason} = attempt_session_resume(team_name, log_path, workspace_path)
+
+      Cortex.Events.broadcast(:team_resume_result, %{
+        run_id: run_id,
+        team_name: team_name,
+        status: status,
+        reason: reason
+      })
+
+      Cortex.Events.broadcast(:run_resumed, %{run_id: run_id})
+    end)
+  end
+
+  defp attempt_session_resume(team_name, log_path, workspace_path) do
+    case Spawner.extract_session_id_from_log(log_path) do
+      {:ok, session_id} ->
+        case Spawner.resume(
+               team_name: team_name,
+               session_id: session_id,
+               timeout_minutes: 30,
+               log_path: log_path,
+               command: "claude",
+               cwd: workspace_path
+             ) do
+          {:ok, %{status: :success}} -> {:success, "session resumed successfully"}
+          {:ok, %{status: :rate_limited}} -> {:rate_limited, "hit rate limit (429)"}
+          {:error, reason} -> {:failure, inspect(reason)}
+        end
+
+      :error ->
+        {:no_session_id, "no session_id found in logs"}
+    end
+  end
+
+  # Extracted from handle_event("start_coordinator") to reduce cyclomatic complexity
+  defp do_start_coordinator(socket, run, config, tiers) do
+    workspace_path = run.workspace_path
+    cortex_path = Path.join(workspace_path, ".cortex")
+    run_id = run.id
+
+    InboxBridge.setup(workspace_path, ["coordinator"])
+
+    prompt = Injection.build_coordinator_prompt(config, tiers, cortex_path)
+    log_path = Path.join([cortex_path, "logs", "coordinator.log"])
+
+    callbacks = build_coordinator_callbacks(run_id, cortex_path)
+
+    safe_store_call(fn ->
+      Cortex.Store.create_team_run(%{
+        run_id: run_id,
+        team_name: "coordinator",
+        role: "Runtime Coordinator",
+        tier: -1,
+        status: "running",
+        prompt: prompt,
+        log_path: log_path,
+        started_at: DateTime.utc_now()
+      })
+    end)
+
+    spawn_coordinator_task(run_id, prompt, log_path, workspace_path, callbacks)
+
+    entry = %{
+      team: "system",
+      text: "Starting coordinator agent...",
+      kind: :resume,
+      at: format_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(activities: prepend_activity(socket.assigns.activities, entry))
+     |> put_flash(:info, "Coordinator agent started")}
+  end
+
+  defp build_coordinator_callbacks(run_id, cortex_path) do
+    on_activity = fn name, activity ->
+      Cortex.Events.broadcast(:team_activity, %{
+        run_id: run_id,
+        team_name: name,
+        type: activity.type,
+        tools: Map.get(activity, :tools, []),
+        details: Map.get(activity, :details, []),
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+    end
+
+    on_token_update = fn name, tokens ->
+      Cortex.Events.broadcast(:team_tokens_updated, %{
+        run_id: run_id,
+        team_name: name,
+        input_tokens: tokens.input_tokens,
+        output_tokens: tokens.output_tokens,
+        cache_read_tokens: tokens.cache_read_tokens,
+        cache_creation_tokens: tokens.cache_creation_tokens
+      })
+    end
+
+    workspace = %Cortex.Orchestration.Workspace{path: cortex_path}
+
+    on_port_opened = fn _name, os_pid ->
+      if os_pid do
+        Workspace.update_registry_entry(workspace, "coordinator",
+          pid: os_pid,
+          status: "running",
+          started_at: DateTime.utc_now() |> DateTime.to_iso8601()
+        )
+      end
+    end
+
+    %{on_activity: on_activity, on_token_update: on_token_update, on_port_opened: on_port_opened}
+  end
+
+  defp spawn_coordinator_task(run_id, prompt, log_path, workspace_path, callbacks) do
+    Task.start(fn ->
+      result =
+        Spawner.spawn(
+          team_name: "coordinator",
+          prompt: prompt,
+          model: "haiku",
+          max_turns: 500,
+          permission_mode: "bypassPermissions",
+          timeout_minutes: 120,
+          log_path: log_path,
+          command: "claude",
+          cwd: workspace_path,
+          on_activity: callbacks.on_activity,
+          on_token_update: callbacks.on_token_update,
+          on_port_opened: callbacks.on_port_opened
+        )
+
+      persist_coordinator_result(run_id, result)
+    end)
+  end
+
+  defp persist_coordinator_result(run_id, result) do
+    attrs = coordinator_result_to_attrs(result)
+
+    safe_store_call(fn ->
+      with team_runs when is_list(team_runs) <- Cortex.Store.get_team_runs(run_id),
+           %{} = tr <- Enum.find(team_runs, &(&1.team_name == "coordinator")) do
+        Cortex.Store.update_team_run(tr, attrs)
+      end
+    end)
+  end
+
+  defp coordinator_result_to_attrs({:ok, r}) do
+    %{
+      status: if(r.status == :success, do: "completed", else: "failed"),
+      session_id: r.session_id,
+      cost_usd: r.cost_usd,
+      input_tokens: r.input_tokens,
+      output_tokens: r.output_tokens,
+      completed_at: DateTime.utc_now()
+    }
+  end
+
+  defp coordinator_result_to_attrs({:error, _}) do
+    %{status: "failed", completed_at: DateTime.utc_now()}
+  end
+
   defp safe_get_run(id) do
     Cortex.Store.get_run(id)
   rescue
@@ -1852,7 +1759,7 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp parse_config_teams(yaml_string) do
-    case Cortex.Orchestration.Config.Loader.load_string(yaml_string) do
+    case ConfigLoader.load_string(yaml_string) do
       {:ok, config, _warnings} ->
         teams =
           Enum.map(config.teams, fn t ->
@@ -1890,25 +1797,23 @@ defmodule CortexWeb.RunDetailLive do
   defp extract_team_members(run) do
     if run.config_yaml do
       case YamlElixir.read_from_string(run.config_yaml) do
-        {:ok, raw} ->
-          raw
-          |> Map.get("teams", [])
-          |> Enum.map(fn team ->
-            name = Map.get(team, "name", "")
-            members = Map.get(team, "members", []) || []
-            roles = Enum.map(members, fn m -> Map.get(m, "role", "") end)
-            {name, roles}
-          end)
-          |> Map.new()
-
-        _ ->
-          %{}
+        {:ok, raw} -> parse_team_roles(Map.get(raw, "teams", []))
+        _ -> %{}
       end
     else
       %{}
     end
   rescue
     _ -> %{}
+  end
+
+  defp parse_team_roles(teams) do
+    Map.new(teams, fn team ->
+      name = Map.get(team, "name", "")
+      members = Map.get(team, "members", []) || []
+      roles = Enum.map(members, fn m -> Map.get(m, "role", "") end)
+      {name, roles}
+    end)
   end
 
   # -- Tab helpers --
@@ -1996,33 +1901,15 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp missing_team_names(run, team_runs) do
-    if run.config_yaml do
-      case YamlElixir.read_from_string(run.config_yaml) do
-        {:ok, raw} ->
-          config_names =
-            raw
-            |> Map.get("teams", [])
-            |> Enum.map(fn t -> Map.get(t, "name", "") end)
-            |> MapSet.new()
+    with yaml when is_binary(yaml) <- run.config_yaml,
+         {:ok, raw} <- YamlElixir.read_from_string(yaml) do
+      config_names = raw |> Map.get("teams", []) |> MapSet.new(&Map.get(&1, "name", ""))
+      existing_names = MapSet.new(team_runs, & &1.team_name)
+      completed = team_runs |> Enum.filter(&(&1.status in ["completed", "done"])) |> MapSet.new(& &1.team_name)
 
-          existing_names = MapSet.new(team_runs, & &1.team_name)
-
-          completed =
-            MapSet.new(
-              Enum.filter(team_runs, fn tr -> tr.status in ["completed", "done"] end),
-              & &1.team_name
-            )
-
-          config_names
-          |> MapSet.difference(existing_names)
-          |> MapSet.difference(completed)
-          |> MapSet.to_list()
-
-        _ ->
-          []
-      end
+      config_names |> MapSet.difference(existing_names) |> MapSet.difference(completed) |> MapSet.to_list()
     else
-      []
+      _ -> []
     end
   rescue
     _ -> []
@@ -2053,38 +1940,45 @@ defmodule CortexWeb.RunDetailLive do
   defp read_team_log(run, team_name) do
     if run && run.workspace_path do
       log_path = Path.join([run.workspace_path, ".cortex", "logs", "#{team_name}.log"])
-
-      case File.read(log_path) do
-        {:ok, content} ->
-          content
-          |> String.split("\n")
-          |> Enum.reject(&(&1 == ""))
-          |> Enum.take(-@max_log_lines)
-          |> Enum.with_index(1)
-          |> Enum.map(fn {line, idx} ->
-            {type, parsed} = parse_log_line(line)
-            %{raw: line, type: type, parsed: parsed, num: idx}
-          end)
-
-        {:error, _} ->
-          nil
-      end
+      parse_log_file(log_path)
     end
+  end
+
+  defp parse_log_file(log_path) do
+    case File.read(log_path) do
+      {:ok, content} ->
+        content
+        |> String.split("\n")
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.take(-@max_log_lines)
+        |> Enum.with_index(1)
+        |> Enum.map(&build_log_entry/1)
+
+      {:error, _} ->
+        nil
+    end
+  end
+
+  defp build_log_entry({line, idx}) do
+    {type, parsed} = parse_log_line(line)
+    %{raw: line, type: type, parsed: parsed, num: idx}
   end
 
   defp read_all_team_logs(run, team_names) do
     if run && run.workspace_path do
       team_names
-      |> Enum.flat_map(fn name ->
-        case read_team_log(run, name) do
-          nil -> []
-          lines -> Enum.map(lines, &Map.put(&1, :team, name))
-        end
-      end)
+      |> Enum.flat_map(&read_team_log_with_name(run, &1))
       |> Enum.sort_by(&extract_timestamp/1)
       |> Enum.take(-@max_log_lines)
       |> Enum.with_index(1)
       |> Enum.map(fn {line, idx} -> %{line | num: idx} end)
+    end
+  end
+
+  defp read_team_log_with_name(run, name) do
+    case read_team_log(run, name) do
+      nil -> []
+      lines -> Enum.map(lines, &Map.put(&1, :team, name))
     end
   end
 
@@ -2130,13 +2024,13 @@ defmodule CortexWeb.RunDetailLive do
   defp read_team_messages(run, team_name) do
     if run && run.workspace_path do
       inbox =
-        case Cortex.Messaging.InboxBridge.read_inbox(run.workspace_path, team_name) do
+        case InboxBridge.read_inbox(run.workspace_path, team_name) do
           {:ok, messages} -> messages
           _ -> []
         end
 
       outbox =
-        case Cortex.Messaging.InboxBridge.read_outbox(run.workspace_path, team_name) do
+        case InboxBridge.read_outbox(run.workspace_path, team_name) do
           {:ok, messages} -> messages
           _ -> []
         end
@@ -2222,86 +2116,82 @@ defmodule CortexWeb.RunDetailLive do
 
   defp build_run_summary(run, team_runs, last_seen, opts) do
     include_diagnostics = Keyword.get(opts, :include_diagnostics, true)
-    now = DateTime.utc_now()
-    started = run.started_at
 
     wall_clock =
-      if started do
-        seconds = DateTime.diff(now, started, :second)
-        format_duration_seconds(seconds)
+      if run.started_at do
+        DateTime.diff(DateTime.utc_now(), run.started_at, :second)
+        |> format_duration_seconds()
       else
         "--"
       end
 
-    total_input = team_runs |> Enum.map(& &1.input_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
+    total_input = sum_team_tokens(team_runs, :input_tokens)
+    total_output = sum_team_tokens(team_runs, :output_tokens)
+    total_cost = team_runs |> Enum.map(&(&1.cost_usd || 0.0)) |> Enum.sum()
 
-    total_output =
-      team_runs |> Enum.map(& &1.output_tokens) |> Enum.reject(&is_nil/1) |> Enum.sum()
-
-    total_cost =
-      team_runs
-      |> Enum.map(&(&1.cost_usd || 0.0))
-      |> Enum.sum()
-
-    # Build per-team lines
     team_lines =
       team_runs
       |> Enum.sort_by(&{&1.tier || 0, &1.team_name})
-      |> Enum.map(fn tr ->
-        status = display_status(tr, last_seen)
+      |> Enum.map(&format_team_summary_line(&1, run, last_seen, include_diagnostics))
 
-        health =
-          if status == "running" do
-            " (#{health_indicator_text(tr, last_seen)})"
-          else
-            ""
-          end
+    [
+      "=== #{run.name || "Untitled"} ===",
+      "Status: #{run.status} | Wall clock: #{wall_clock}",
+      "Tokens: #{format_token_count(total_input)} in / #{format_token_count(total_output)} out | Cost: $#{Float.round(total_cost * 1.0, 4)}",
+      "",
+      "Teams:" | team_lines
+    ]
+    |> Enum.join("\n")
+  end
 
-        tokens =
-          if tr.input_tokens || tr.output_tokens do
-            " | #{format_token_count(tr.input_tokens || 0)} in / #{format_token_count(tr.output_tokens || 0)} out"
-          else
-            ""
-          end
+  defp sum_team_tokens(team_runs, field) do
+    team_runs |> Enum.map(&Map.get(&1, field)) |> Enum.reject(&is_nil/1) |> Enum.sum()
+  end
 
-        cost =
-          if tr.cost_usd && tr.cost_usd > 0 do
-            " | $#{Float.round(tr.cost_usd * 1.0, 4)}"
-          else
-            ""
-          end
+  defp format_team_summary_line(tr, run, last_seen, include_diagnostics) do
+    status = display_status(tr, last_seen)
+    health = if status == "running", do: " (#{health_indicator_text(tr, last_seen)})", else: ""
 
-        diag =
-          if include_diagnostics and status in ["running", "stalled"] and run.workspace_path do
-            case load_diagnostics(run, tr.team_name, team_status: tr.status || "pending") do
-              nil -> ""
-              report -> " | #{report.diagnosis_detail}"
-            end
-          else
-            ""
-          end
+    tokens = format_team_token_summary(tr)
+    cost = format_team_cost(tr)
+    diag = format_team_diag_summary(tr, run, status, include_diagnostics)
+    result = format_team_result_snippet(tr)
 
-        result_snippet =
-          if tr.result_summary do
-            snippet = tr.result_summary |> String.split("\n") |> hd() |> String.slice(0, 80)
-            "\n    Result: #{snippet}"
-          else
-            ""
-          end
+    "  [T#{tr.tier || 0}] #{tr.team_name}: #{status}#{health}#{tokens}#{cost}#{diag}#{result}"
+  end
 
-        "  [T#{tr.tier || 0}] #{tr.team_name}: #{status}#{health}#{tokens}#{cost}#{diag}#{result_snippet}"
-      end)
+  defp format_team_token_summary(tr) do
+    if tr.input_tokens || tr.output_tokens do
+      " | #{format_token_count(tr.input_tokens || 0)} in / #{format_token_count(tr.output_tokens || 0)} out"
+    else
+      ""
+    end
+  end
 
-    lines =
-      [
-        "=== #{run.name || "Untitled"} ===",
-        "Status: #{run.status} | Wall clock: #{wall_clock}",
-        "Tokens: #{format_token_count(total_input)} in / #{format_token_count(total_output)} out | Cost: $#{Float.round(total_cost * 1.0, 4)}",
-        "",
-        "Teams:"
-      ] ++ team_lines
+  defp format_team_cost(tr) do
+    if tr.cost_usd && tr.cost_usd > 0,
+      do: " | $#{Float.round(tr.cost_usd * 1.0, 4)}",
+      else: ""
+  end
 
-    Enum.join(lines, "\n")
+  defp format_team_diag_summary(tr, run, status, include_diagnostics) do
+    if include_diagnostics and status in ["running", "stalled"] and run.workspace_path do
+      case load_diagnostics(run, tr.team_name, team_status: tr.status || "pending") do
+        nil -> ""
+        report -> " | #{report.diagnosis_detail}"
+      end
+    else
+      ""
+    end
+  end
+
+  defp format_team_result_snippet(tr) do
+    if tr.result_summary do
+      snippet = tr.result_summary |> String.split("\n") |> hd() |> String.slice(0, 80)
+      "\n    Result: #{snippet}"
+    else
+      ""
+    end
   end
 
   defp format_duration_seconds(seconds) do
@@ -2356,60 +2246,115 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   # Check all team PIDs from registry.json, returns %{team_name => true/false}
-  defp check_all_team_pids(workspace_path) do
-    registry_path = Path.join([workspace_path, ".cortex", "registry.json"])
-
-    with {:ok, content} <- File.read(registry_path),
-         {:ok, data} <- Jason.decode(content) do
-      teams = Map.get(data, "teams", [])
-
-      Map.new(teams, fn team ->
-        name = Map.get(team, "name", "")
-        pid = Map.get(team, "pid")
-
-        alive =
-          if is_integer(pid) and pid > 0 do
-            case System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true) do
-              {_, 0} -> true
-              _ -> false
-            end
-          else
-            false
-          end
-
-        {name, alive}
+  defp handle_reconcile_result(socket, run, {:ok, changes}) when changes != [] do
+    entries =
+      Enum.map(changes, fn change ->
+        %{team: change.team, text: "#{change.from} -> #{change.to}: #{change.detail}",
+          kind: :resume, at: format_now()}
       end)
-    else
-      _ -> %{}
-    end
-  rescue
-    _ -> %{}
+
+    activities = Enum.reduce(entries, socket.assigns.activities, &prepend_activity(&2, &1))
+
+    done_entry = %{
+      team: "system",
+      text: "Reconciled #{length(changes)} team(s)",
+      kind: :resume,
+      at: format_now()
+    }
+
+    team_runs = safe_get_team_runs(run.id)
+    fresh_run = safe_get_run(run.id)
+    {tiers, edges} = build_dag(fresh_run || run, team_runs)
+
+    {:noreply,
+     assign(socket,
+       activities: prepend_activity(activities, done_entry),
+       team_runs: team_runs,
+       run: fresh_run || run,
+       tiers: tiers,
+       edges: edges
+     )}
   end
 
-  # Check if a team's OS process is still alive by reading the PID from registry.json
+  defp handle_reconcile_result(socket, _run, {:ok, []}) do
+    no_change = %{
+      team: "system",
+      text: "No changes — no completed sessions found in logs",
+      kind: :resume,
+      at: format_now()
+    }
+
+    {:noreply, assign(socket, activities: prepend_activity(socket.assigns.activities, no_change))}
+  end
+
+  defp handle_reconcile_result(socket, _run, {:error, reason}) do
+    err_entry = %{
+      team: "system",
+      text: "Reconcile failed: #{inspect(reason)}",
+      kind: :resume,
+      at: format_now()
+    }
+
+    {:noreply, assign(socket, activities: prepend_activity(socket.assigns.activities, err_entry))}
+  end
+
+  defp update_team_tokens(team_runs, team_name, payload) do
+    Enum.map(team_runs, fn tr ->
+      if tr.team_name == team_name do
+        %{tr | input_tokens: payload.input_tokens, output_tokens: payload.output_tokens}
+      else
+        tr
+      end
+    end)
+  end
+
+  defp maybe_start_pid_check(run, socket) do
+    if run.status in ["running", "failed"] and connected?(socket) do
+      send(self(), :check_pids)
+    end
+  end
+
+  defp check_all_team_pids(workspace_path) do
+    case read_registry_teams(workspace_path) do
+      {:ok, teams} ->
+        Map.new(teams, fn team ->
+          {Map.get(team, "name", ""), os_pid_alive?(Map.get(team, "pid"))}
+        end)
+
+      :error ->
+        %{}
+    end
+  end
+
   defp team_pid_alive?(workspace_path, team_name) do
+    case read_registry_teams(workspace_path) do
+      {:ok, teams} ->
+        team = Enum.find(teams, fn t -> Map.get(t, "name") == team_name end)
+        os_pid_alive?(team && Map.get(team, "pid"))
+
+      :error ->
+        false
+    end
+  end
+
+  defp read_registry_teams(workspace_path) do
     registry_path = Path.join([workspace_path, ".cortex", "registry.json"])
 
     with {:ok, content} <- File.read(registry_path),
          {:ok, data} <- Jason.decode(content) do
-      teams = Map.get(data, "teams", [])
-
-      case Enum.find(teams, fn t -> Map.get(t, "name") == team_name end) do
-        %{"pid" => pid} when is_integer(pid) and pid > 0 ->
-          case System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true) do
-            {_, 0} -> true
-            _ -> false
-          end
-
-        _ ->
-          false
-      end
+      {:ok, Map.get(data, "teams", [])}
     else
-      _ -> false
+      _ -> :error
     end
   rescue
-    _ -> false
+    _ -> :error
   end
+
+  defp os_pid_alive?(pid) when is_integer(pid) and pid > 0 do
+    match?({_, 0}, System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true))
+  end
+
+  defp os_pid_alive?(_), do: false
 
   defp diag_banner_class(:in_progress), do: "bg-blue-950/30 border-blue-800 text-blue-300"
   defp diag_banner_class(:completed), do: "bg-green-950/30 border-green-800 text-green-300"
@@ -2501,11 +2446,9 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp safe_store_call(fun) do
-    try do
-      fun.()
-    rescue
-      _ -> :ok
-    end
+    fun.()
+  rescue
+    _ -> :ok
   end
 
   defp truncate_for_store(nil), do: nil
