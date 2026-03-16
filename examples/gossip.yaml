@@ -19,6 +19,7 @@ gossip:
   rounds: 5                      # number of gossip exchange rounds
   topology: random               # full_mesh | ring | random
   exchange_interval_seconds: 60  # time between rounds (agents work between exchanges)
+  coordinator: true
 
 agents:
   - name: competitor-analyst

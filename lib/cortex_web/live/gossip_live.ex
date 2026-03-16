@@ -800,6 +800,8 @@ defmodule CortexWeb.GossipLive do
       tmp_path = Path.join(System.tmp_dir!(), "cortex_gossip_#{run_id}.yaml")
       File.write!(tmp_path, yaml)
 
+      safe_update_run_status(run, "running")
+
       try do
         {:ok, summary} =
           SessionRunner.run_config(config,

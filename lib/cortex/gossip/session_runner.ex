@@ -177,6 +177,9 @@ defmodule Cortex.Gossip.SessionRunner do
       # Step 10b: Update TeamRun records with final results
       update_team_run_records(run_id, results)
 
+      # Step 11: Write end-of-run summary to .cortex/summaries/
+      write_run_summary(workspace_path, config, results, all_entries, run_duration)
+
       broadcast(:gossip_completed, %{
         project: config.name,
         duration_ms: run_duration,
@@ -277,6 +280,13 @@ defmodule Cortex.Gossip.SessionRunner do
               num_turns: result.num_turns,
               session_id: result.session_id,
               result_summary: truncate(result.result, 2000),
+              completed_at: DateTime.utc_now()
+            }
+
+          %{type: :error, reason: reason} ->
+            %{
+              status: db_status,
+              result_summary: "Error: #{inspect(reason)}",
               completed_at: DateTime.utc_now()
             }
 
@@ -772,6 +782,14 @@ defmodule Cortex.Gossip.SessionRunner do
     end
 
     Task.async(fn ->
+      if run_id do
+        Registry.register(
+          Cortex.Orchestration.RunnerRegistry,
+          {:coordinator, run_id},
+          %{started_at: DateTime.utc_now()}
+        )
+      end
+
       Spawner.spawn(
         team_name: "coordinator",
         prompt: prompt,
@@ -1026,6 +1044,99 @@ defmodule Cortex.Gossip.SessionRunner do
       source: entry.source,
       confidence: entry.confidence
     }
+  end
+
+  # -- End-of-run summary file (always written, regardless of coordinator) ------
+
+  @spec write_run_summary(String.t(), GossipConfig.t(), list(), [Entry.t()], non_neg_integer()) ::
+          :ok
+  defp write_run_summary(workspace_path, config, results, entries, run_duration) do
+    summaries_dir = Path.join([workspace_path, ".cortex", "summaries"])
+    File.mkdir_p!(summaries_dir)
+
+    timestamp =
+      DateTime.utc_now()
+      |> DateTime.to_iso8601()
+      |> String.replace(~r/[:\-]/, "")
+      |> String.slice(0, 15)
+
+    filename = "#{timestamp}_run_complete.md"
+
+    succeeded = Enum.count(results, fn {_n, s, _d} -> s == :ok end)
+    failed = Enum.filter(results, fn {_n, s, _d} -> s != :ok end)
+    total_input = sum_result_field(results, :input_tokens, 0)
+    total_output = sum_result_field(results, :output_tokens, 0)
+    agent_lines = format_agent_lines(results)
+    failure_lines = format_failure_lines(failed, config)
+    knowledge_lines = format_knowledge_lines(entries)
+
+    content = """
+    # Run Summary: #{config.name}
+
+    **Status**: #{succeeded}/#{length(results)} agents completed, #{length(failed)} failed
+    **Duration**: #{div(run_duration, 1000)}s
+    **Tokens**: #{total_input} in / #{total_output} out
+    **Gossip**: #{config.gossip.rounds} rounds, #{config.gossip.topology} topology
+    **Knowledge**: #{length(entries)} unique entries
+
+    ## Agent Results
+    #{agent_lines}
+    #{failure_lines}
+    ## Knowledge by Topic
+    #{knowledge_lines}
+    """
+
+    File.write!(Path.join(summaries_dir, filename), String.trim(content))
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp format_agent_lines(results) do
+    Enum.map_join(results, "\n", fn {name, status, data} ->
+      status_str = if status == :ok, do: "completed", else: "FAILED"
+      "- **#{name}**: #{status_str}\n    #{format_agent_detail(data)}"
+    end)
+  end
+
+  defp format_agent_detail(%{result: result}) do
+    input = result.input_tokens || 0
+    output = result.output_tokens || 0
+    turns = result.num_turns || 0
+    snippet = truncate(result.result, 200)
+    "#{input} in / #{output} out, #{turns} turns\n    Result: #{snippet}"
+  end
+
+  defp format_agent_detail(%{type: :error, reason: reason}), do: "Error: #{inspect(reason)}"
+  defp format_agent_detail(_), do: "No result data"
+
+  defp format_failure_lines([], _config), do: ""
+
+  defp format_failure_lines(failed, config) do
+    lines =
+      Enum.map_join(failed, "\n", fn {name, _status, data} ->
+        "- **#{name}**: #{format_failure_reason(data, config)}"
+      end)
+
+    "\n## Failures\n#{lines}"
+  end
+
+  defp format_failure_reason(%{type: :error, reason: :timeout}, config),
+    do: "Timed out after #{config.defaults.timeout_minutes} minutes"
+
+  defp format_failure_reason(%{type: :error, reason: reason}, _config), do: inspect(reason)
+
+  defp format_failure_reason(%{type: :failure, result: result}, _config),
+    do: truncate(result.result, 500) || "Unknown failure"
+
+  defp format_failure_reason(_, _config), do: "Unknown error — no result data captured"
+
+  defp format_knowledge_lines(entries) do
+    entries
+    |> Enum.group_by(& &1.topic)
+    |> Enum.map_join("\n", fn {topic, topic_entries} ->
+      "- #{topic}: #{length(topic_entries)} entries"
+    end)
   end
 
   defp truncate(nil, _max), do: nil

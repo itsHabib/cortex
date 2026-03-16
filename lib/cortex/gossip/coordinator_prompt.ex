@@ -31,6 +31,7 @@ defmodule Cortex.Gossip.CoordinatorPrompt do
     outbox_path = Path.join([cortex_path, "messages", "coordinator", "outbox.json"])
     knowledge_dir = Path.join(cortex_path, "knowledge")
     messages_dir = Path.join(cortex_path, "messages")
+    summaries_dir = Path.join(cortex_path, "summaries")
     poll_interval = coordinator_poll_interval(config.gossip.exchange_interval_seconds)
 
     """
@@ -125,6 +126,27 @@ defmodule Cortex.Gossip.CoordinatorPrompt do
     5. After each synthesis, evaluate whether to steer or terminate
     6. Keep your synthesis messages concise but specific — agents need actionable guidance
     7. Do NOT do the agents' work — you observe, synthesize, steer, and communicate
+
+    ## Summary Reports
+    When asked (via your inbox) or at key milestones, write summary reports to `#{summaries_dir}/`:
+    - After significant gossip rounds (when new themes emerge or knowledge shifts)
+    - When knowledge has converged
+    - When a human requests a summary via your inbox
+    - At the end of the session (ALWAYS produce a final summary)
+
+    Create the summaries directory first: `mkdir -p #{summaries_dir}`
+
+    File naming: `<ISO8601_compact>_<event>.md`
+    Example: `2026-03-15T230000_round3_synthesis.md`
+
+    Each summary should include:
+    - What each agent has discovered (read their knowledge files)
+    - Key themes, gaps, and contradictions across agents
+    - Convergence status — are agents finding new things or repeating each other?
+    - Any issues detected (agents stuck, rate limited, not producing findings)
+    - Recommendations for remaining rounds or next steps
+
+    Keep summaries concise (under 100 lines). They are displayed in the dashboard.
     """
     |> String.trim()
   end

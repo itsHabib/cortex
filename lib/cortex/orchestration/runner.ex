@@ -110,7 +110,7 @@ defmodule Cortex.Orchestration.Runner do
   """
   @spec coordinator_alive?(String.t()) :: boolean()
   def coordinator_alive?(run_id) do
-    case Registry.lookup(Cortex.Orchestration.RunnerRegistry, {:runner, run_id}) do
+    case Registry.lookup(Cortex.Orchestration.RunnerRegistry, {:coordinator, run_id}) do
       [{pid, _value}] -> Process.alive?(pid)
       [] -> false
     end

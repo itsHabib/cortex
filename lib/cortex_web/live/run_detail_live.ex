@@ -45,13 +45,11 @@ defmodule CortexWeb.RunDetailLive do
            expanded_logs: MapSet.new(),
            messages_team: nil,
            team_inbox: [],
-           team_outbox: [],
            diagnostics_team: nil,
            diagnostics_report: nil,
            coordinator_expanded: false,
            coordinator_log: nil,
            coordinator_inbox: [],
-           coordinator_outbox: [],
            activity_team: nil,
            coordinator_summaries: [],
            selected_summary: nil,
@@ -92,14 +90,12 @@ defmodule CortexWeb.RunDetailLive do
            expanded_logs: MapSet.new(),
            messages_team: nil,
            team_inbox: [],
-           team_outbox: [],
            diagnostics_team: nil,
            diagnostics_report: nil,
            coordinator_alive: coordinator_alive,
            coordinator_expanded: false,
            coordinator_log: nil,
            coordinator_inbox: [],
-           coordinator_outbox: [],
            activity_team: nil,
            coordinator_summaries: [],
            selected_summary: nil,
@@ -259,13 +255,12 @@ defmodule CortexWeb.RunDetailLive do
       socket =
         if socket.assigns.current_tab == "messages" and
              socket.assigns.messages_team == team_name do
-          {inbox, outbox} = read_team_messages(run, team_name)
+          inbox = read_team_inbox(run, team_name)
 
           assign(socket,
             activities: activities,
             last_seen: last_seen,
-            team_inbox: inbox,
-            team_outbox: outbox
+            team_inbox: inbox
           )
         else
           assign(socket, activities: activities, last_seen: last_seen)
@@ -385,8 +380,8 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("switch_tab", %{"tab" => "messages"}, socket) do
     socket =
       if socket.assigns.messages_team do
-        {inbox, outbox} = read_team_messages(socket.assigns.run, socket.assigns.messages_team)
-        assign(socket, team_inbox: inbox, team_outbox: outbox)
+        inbox = read_team_inbox(socket.assigns.run, socket.assigns.messages_team)
+        assign(socket, team_inbox: inbox)
       else
         socket
       end
@@ -524,25 +519,24 @@ defmodule CortexWeb.RunDetailLive do
   # -- Event handlers: messages team selection --
 
   def handle_event("select_messages_team", %{"team" => ""}, socket) do
-    {:noreply, assign(socket, messages_team: nil, team_inbox: [], team_outbox: [])}
+    {:noreply, assign(socket, messages_team: nil, team_inbox: [])}
   end
 
   def handle_event("select_messages_team", %{"team" => team_name}, socket) do
-    {inbox, outbox} = read_team_messages(socket.assigns.run, team_name)
+    inbox = read_team_inbox(socket.assigns.run, team_name)
 
     {:noreply,
      assign(socket,
        messages_team: team_name,
        team_inbox: inbox,
-       team_outbox: outbox,
        msg_to: team_name
      )}
   end
 
   def handle_event("refresh_messages", _params, socket) do
     if socket.assigns.messages_team do
-      {inbox, outbox} = read_team_messages(socket.assigns.run, socket.assigns.messages_team)
-      {:noreply, assign(socket, team_inbox: inbox, team_outbox: outbox)}
+      inbox = read_team_inbox(socket.assigns.run, socket.assigns.messages_team)
+      {:noreply, assign(socket, team_inbox: inbox)}
     else
       {:noreply, socket}
     end
@@ -575,13 +569,12 @@ defmodule CortexWeb.RunDetailLive do
 
         socket =
           if socket.assigns.messages_team == to do
-            {inbox, outbox} = read_team_messages(run, to)
+            inbox = read_team_inbox(run, to)
 
             assign(socket,
               activities: activities,
               msg_content: "",
-              team_inbox: inbox,
-              team_outbox: outbox
+              team_inbox: inbox
             )
           else
             assign(socket, activities: activities, msg_content: "")
@@ -788,14 +781,13 @@ defmodule CortexWeb.RunDetailLive do
     else
       run = socket.assigns.run
       log = read_coordinator_log(run)
-      {inbox, outbox} = read_team_messages(run, "coordinator")
+      inbox = read_team_inbox(run, "coordinator")
 
       {:noreply,
        assign(socket,
          coordinator_expanded: true,
          coordinator_log: log,
-         coordinator_inbox: inbox,
-         coordinator_outbox: outbox
+         coordinator_inbox: inbox
        )}
     end
   end
@@ -803,13 +795,12 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("refresh_coordinator", _params, socket) do
     run = socket.assigns.run
     log = read_coordinator_log(run)
-    {inbox, outbox} = read_team_messages(run, "coordinator")
+    inbox = read_team_inbox(run, "coordinator")
 
     {:noreply,
      assign(socket,
        coordinator_log: log,
-       coordinator_inbox: inbox,
-       coordinator_outbox: outbox
+       coordinator_inbox: inbox
      )}
   end
 
@@ -840,6 +831,39 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("refresh_summaries", _params, socket) do
     summaries = read_coordinator_summaries(socket.assigns.run)
     {:noreply, assign(socket, coordinator_summaries: summaries)}
+  end
+
+  def handle_event("request_coordinator_summary", _params, socket) do
+    run = socket.assigns.run
+    workspace_path = run && run.workspace_path
+
+    cond do
+      not (run && workspace_path) ->
+        {:noreply, put_flash(socket, :error, "No workspace path")}
+
+      not socket.assigns.coordinator_alive ->
+        {:noreply, put_flash(socket, :error, "Coordinator is not alive")}
+
+      true ->
+        content =
+          "Please write a summary of current run state to .cortex/summaries/. " <>
+            "Include: what each agent has produced so far, key findings and themes, " <>
+            "convergence status, any issues detected, and recommendations."
+
+        Runner.send_message(workspace_path, "human", "coordinator", content)
+
+        entry = %{
+          team: "system",
+          text: "Summary requested from coordinator",
+          kind: :message,
+          at: format_now()
+        }
+
+        {:noreply,
+         socket
+         |> assign(activities: prepend_activity(socket.assigns.activities, entry))
+         |> put_flash(:info, "Summary requested — coordinator will write it on next poll (~10s)")}
+    end
   end
 
   def handle_event("select_summary", %{"file" => filename}, socket) do
@@ -1092,18 +1116,13 @@ defmodule CortexWeb.RunDetailLive do
             <!-- Coordinator Messages -->
             <div>
               <h3 class="text-xs font-medium text-gray-500 uppercase mb-2">
-                Inbox ({length(@coordinator_inbox)}) / Outbox ({length(@coordinator_outbox)})
+                Inbox ({length(@coordinator_inbox)})
               </h3>
-              <%= if @coordinator_inbox != [] or @coordinator_outbox != [] do %>
+              <%= if @coordinator_inbox != [] do %>
                 <div class="max-h-[40vh] overflow-y-auto space-y-2">
                   <div :for={msg <- @coordinator_inbox} class="bg-gray-950 rounded p-2 text-xs">
                     <span class="text-cortex-400">from: {Map.get(msg, "from", "?")}</span>
-                    <span class="text-gray-600 ml-2">{Map.get(msg, "timestamp", "")}</span>
-                    <p class="text-gray-300 mt-1">{truncate(Map.get(msg, "content", ""), 200)}</p>
-                  </div>
-                  <div :for={msg <- @coordinator_outbox} class="bg-gray-950 rounded p-2 text-xs border-l-2 border-green-800">
-                    <span class="text-green-400">to: {Map.get(msg, "to", "?")}</span>
-                    <span class="text-gray-600 ml-2">{Map.get(msg, "timestamp", "")}</span>
+                    <span class="text-gray-500 ml-2">{Map.get(msg, "timestamp", "")}</span>
                     <p class="text-gray-300 mt-1">{truncate(Map.get(msg, "content", ""), 200)}</p>
                   </div>
                 </div>
@@ -1115,10 +1134,17 @@ defmodule CortexWeb.RunDetailLive do
         </div>
 
         <!-- Coordinator Summaries -->
-        <%= if @coordinator_summaries != [] do %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
-            <div class="flex items-center justify-between mb-3">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Coordinator Summaries</h2>
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Coordinator Summaries</h2>
+            <div class="flex gap-2">
+              <button
+                :if={@coordinator_alive}
+                phx-click="request_coordinator_summary"
+                class="text-xs text-cortex-400 hover:text-cortex-300 px-2 py-1 rounded border border-cortex-700 hover:border-cortex-500"
+              >
+                Request Summary
+              </button>
               <button
                 phx-click="refresh_summaries"
                 class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
@@ -1126,6 +1152,8 @@ defmodule CortexWeb.RunDetailLive do
                 Refresh
               </button>
             </div>
+          </div>
+          <%= if @coordinator_summaries != [] do %>
             <div class="flex flex-wrap gap-2 mb-3">
               <button
                 :for={file <- @coordinator_summaries}
@@ -1145,8 +1173,10 @@ defmodule CortexWeb.RunDetailLive do
             <div :if={@selected_summary} class="bg-gray-950 rounded p-3">
               <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_summary.content}</pre>
             </div>
-          </div>
-        <% end %>
+          <% else %>
+            <p class="text-gray-500 text-sm">{if @coordinator_alive, do: "No summaries yet — click Request Summary.", else: "No summaries. Start the coordinator to generate them."}</p>
+          <% end %>
+        </div>
 
         <!-- On-demand Run Summary -->
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
@@ -1394,7 +1424,7 @@ defmodule CortexWeb.RunDetailLive do
                     <div :for={msg <- @team_inbox} class="bg-gray-950 rounded p-3 text-sm">
                       <div class="flex items-center justify-between mb-1">
                         <span class="text-cortex-400 font-medium">from: {Map.get(msg, "from", "?")}</span>
-                        <span class="text-gray-600 text-xs">{Map.get(msg, "timestamp", "")}</span>
+                        <span class="text-gray-500 text-xs">{Map.get(msg, "timestamp", "")}</span>
                       </div>
                       <p class="text-gray-300">{Map.get(msg, "content", "")}</p>
                     </div>
@@ -1402,25 +1432,6 @@ defmodule CortexWeb.RunDetailLive do
                 <% end %>
               </div>
 
-              <!-- Outbox -->
-              <div :if={@messages_team} class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-                  Outbox ({length(@team_outbox)} messages from {@messages_team})
-                </h3>
-                <%= if @team_outbox == [] do %>
-                  <p class="text-gray-500 text-sm">No messages sent.</p>
-                <% else %>
-                  <div class="space-y-2 max-h-[40vh] overflow-y-auto">
-                    <div :for={msg <- @team_outbox} class="bg-gray-950 rounded p-3 text-sm">
-                      <div class="flex items-center justify-between mb-1">
-                        <span class="text-green-400 font-medium">to: {Map.get(msg, "to", "?")}</span>
-                        <span class="text-gray-600 text-xs">{Map.get(msg, "timestamp", "")}</span>
-                      </div>
-                      <p class="text-gray-300">{Map.get(msg, "content", "")}</p>
-                    </div>
-                  </div>
-                <% end %>
-              </div>
             </div>
 
             <!-- Send Message (1/3 width) -->
@@ -1701,7 +1712,7 @@ defmodule CortexWeb.RunDetailLive do
                       {Enum.join(entry.tools, ", ")}
                     </span>
                     <span class="text-gray-300 break-all">{entry.detail}</span>
-                    <span :if={entry.timestamp} class="text-gray-600 text-xs shrink-0 ml-auto">
+                    <span :if={entry.timestamp} class="text-gray-500 text-xs shrink-0 ml-auto">
                       {format_iso_time(entry.timestamp)}
                     </span>
                   </div>
@@ -2247,6 +2258,12 @@ defmodule CortexWeb.RunDetailLive do
 
   defp spawn_coordinator_task(run_id, prompt, log_path, workspace_path, callbacks) do
     Task.start(fn ->
+      Registry.register(
+        Cortex.Orchestration.RunnerRegistry,
+        {:coordinator, run_id},
+        %{started_at: DateTime.utc_now()}
+      )
+
       result =
         Spawner.spawn(
           team_name: "coordinator",
@@ -2639,23 +2656,14 @@ defmodule CortexWeb.RunDetailLive do
   defp log_type_class("tool_result"), do: "bg-emerald-900/50 text-emerald-300"
   defp log_type_class(_), do: "bg-gray-800/50 text-gray-400"
 
-  defp read_team_messages(run, team_name) do
+  defp read_team_inbox(run, team_name) do
     if run && run.workspace_path do
-      inbox =
-        case InboxBridge.read_inbox(run.workspace_path, team_name) do
-          {:ok, messages} -> messages
-          _ -> []
-        end
-
-      outbox =
-        case InboxBridge.read_outbox(run.workspace_path, team_name) do
-          {:ok, messages} -> messages
-          _ -> []
-        end
-
-      {inbox, outbox}
+      case InboxBridge.read_inbox(run.workspace_path, team_name) do
+        {:ok, messages} -> messages
+        _ -> []
+      end
     else
-      {[], []}
+      []
     end
   end
 
