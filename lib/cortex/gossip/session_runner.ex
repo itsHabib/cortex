@@ -155,9 +155,12 @@ defmodule Cortex.Gossip.SessionRunner do
       # Step 6: Run exchange rounds (agents are running concurrently)
       run_exchange_loop(config, stores, workspace_path, coordinator?)
 
-      # Step 7: Await all agent results
-      timeout_ms = config.defaults.timeout_minutes * 60_000
-      results = await_agents(agent_tasks, timeout_ms)
+      # Step 6b: Signal agents to wrap up after rounds complete
+      signal_agents_to_wrap_up(workspace_path, agent_names)
+
+      # Step 7: Await all agent results (short timeout — rounds are done)
+      wrap_up_ms = :timer.minutes(2)
+      results = await_agents(agent_tasks, wrap_up_ms)
 
       # Stop coordinator (it runs for the session duration)
       if coordinator_task, do: stop_coordinator_task(coordinator_task)
@@ -623,6 +626,28 @@ defmodule Cortex.Gossip.SessionRunner do
         round + 1
       )
     end
+  end
+
+  @spec signal_agents_to_wrap_up(String.t(), [String.t()]) :: :ok
+  defp signal_agents_to_wrap_up(workspace_path, agent_names) do
+    Cortex.Logger.info("All gossip rounds complete — signaling agents to wrap up")
+
+    Enum.each(agent_names, fn name ->
+      message = %{
+        from: "system",
+        to: name,
+        content:
+          "All gossip rounds are complete. Please finalize your findings.json " <>
+            "with your best findings, provide a final summary, and finish up. " <>
+            "Do not start new research.",
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        type: "terminate"
+      }
+
+      InboxBridge.deliver(workspace_path, name, message)
+    end)
+
+    :ok
   end
 
   @spec ingest_all_findings(

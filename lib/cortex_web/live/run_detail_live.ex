@@ -56,6 +56,7 @@ defmodule CortexWeb.RunDetailLive do
            selected_summary: nil,
            run_summary: nil,
            summary_jobs: [],
+           gossip_round: nil,
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => ""},
@@ -103,6 +104,7 @@ defmodule CortexWeb.RunDetailLive do
            selected_summary: nil,
            run_summary: nil,
            summary_jobs: [],
+           gossip_round: nil,
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => run.name || ""},
@@ -347,6 +349,25 @@ defmodule CortexWeb.RunDetailLive do
   def handle_info(:tick_elapsed, socket) do
     # Just triggers a re-render so elapsed_since/1 shows updated time
     {:noreply, socket}
+  end
+
+  def handle_info(%{type: :gossip_round_completed, payload: payload}, socket) do
+    round = Map.get(payload, :round, 0)
+    total = Map.get(payload, :total, 0)
+
+    entry = %{
+      team: "system",
+      text: "Gossip round #{round}/#{total} complete — knowledge exchanged",
+      kind: :message,
+      at: format_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(
+       gossip_round: %{current: round, total: total},
+       activities: prepend_activity(socket.assigns.activities, entry)
+     )}
   end
 
   def handle_info({:ai_summary_result, job_id, {:ok, summary}}, socket) do
@@ -1224,18 +1245,42 @@ defmodule CortexWeb.RunDetailLive do
           <%= if gossip_info do %>
             <div class="bg-gray-900 rounded-lg border border-purple-900/50 p-4 mb-6">
               <h2 class="text-sm font-medium text-purple-400 uppercase tracking-wider mb-3">Gossip Protocol</h2>
-              <div class="grid grid-cols-3 gap-4 text-sm">
+              <div class="grid grid-cols-4 gap-4 text-sm">
                 <div>
                   <span class="text-gray-500">Topology</span>
                   <p class="text-purple-300 font-medium">{gossip_info.topology}</p>
                 </div>
                 <div>
                   <span class="text-gray-500">Rounds</span>
-                  <p class="text-purple-300 font-medium">{gossip_info.rounds}</p>
+                  <%= if @gossip_round do %>
+                    <p class="text-purple-300 font-medium">
+                      {if @gossip_round.current >= @gossip_round.total, do: "Done", else: "#{@gossip_round.current}/#{@gossip_round.total}"}
+                    </p>
+                    <!-- Progress bar -->
+                    <div class="mt-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        class="h-full bg-purple-500 rounded-full transition-all duration-500"
+                        style={"width: #{min(round(@gossip_round.current / max(@gossip_round.total, 1) * 100), 100)}%"}
+                      />
+                    </div>
+                  <% else %>
+                    <p class="text-purple-300 font-medium">{gossip_info.rounds} total</p>
+                  <% end %>
                 </div>
                 <div>
                   <span class="text-gray-500">Exchange Interval</span>
                   <p class="text-purple-300 font-medium">{gossip_info.exchange_interval}s</p>
+                </div>
+                <div>
+                  <span class="text-gray-500">Status</span>
+                  <p class={["font-medium", if(@gossip_round && @gossip_round.current >= @gossip_round.total, do: "text-green-300", else: "text-purple-300")]}>
+                    {cond do
+                      @gossip_round && @gossip_round.current >= @gossip_round.total -> "Wrapping up"
+                      @gossip_round -> "Exchanging"
+                      @run.status == "completed" -> "Complete"
+                      true -> "Waiting"
+                    end}
+                  </p>
                 </div>
               </div>
             </div>
@@ -1266,6 +1311,11 @@ defmodule CortexWeb.RunDetailLive do
                   <.token_display input={total_input(team)} output={team.output_tokens} />
                   <.duration_display ms={team.duration_ms} />
                 </div>
+                <%= if team.status == "failed" and team.result_summary do %>
+                  <p class="text-xs text-red-400/80 mt-2 truncate" title={team.result_summary}>
+                    {truncate(team.result_summary, 120)}
+                  </p>
+                <% end %>
               </a>
             </div>
           <% end %>
