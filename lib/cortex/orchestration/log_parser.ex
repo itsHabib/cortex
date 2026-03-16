@@ -217,9 +217,14 @@ defmodule Cortex.Orchestration.LogParser do
     stop_reason = Map.get(msg, "stop_reason")
     timestamp = extract_timestamp(msg)
 
-    # Extract usage from this message
+    # Extract usage from this message (include cache tokens in input total)
     usage = Map.get(msg, "usage", %{})
-    input_tokens = Map.get(usage, "input_tokens", 0)
+
+    input_tokens =
+      Map.get(usage, "input_tokens", 0) +
+        Map.get(usage, "cache_read_input_tokens", 0) +
+        Map.get(usage, "cache_creation_input_tokens", 0)
+
     output_tokens = Map.get(usage, "output_tokens", 0)
 
     tools = extract_tool_blocks(content)
@@ -291,7 +296,12 @@ defmodule Cortex.Orchestration.LogParser do
     timestamp = extract_timestamp(parsed) || state.last_timestamp
 
     usage = Map.get(parsed, "usage", %{})
-    input_tokens = Map.get(usage, "input_tokens", 0)
+
+    input_tokens =
+      Map.get(usage, "input_tokens", 0) +
+        Map.get(usage, "cache_read_input_tokens", 0) +
+        Map.get(usage, "cache_creation_input_tokens", 0)
+
     output_tokens = Map.get(usage, "output_tokens", 0)
 
     detail =
