@@ -14,6 +14,8 @@ defmodule CortexWeb.RunDetailLive do
   alias Cortex.Orchestration.SummaryAgent
   alias Cortex.Orchestration.Workspace
 
+  require Logger
+
   @max_activities 150
   @stale_threshold_seconds 300
   @max_log_lines 500
@@ -401,14 +403,16 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   def handle_info({:ai_summary_result, job_id, {:error, reason}}, socket) do
+    Logger.warning("Agent summary failed: #{inspect(reason)}")
+
     entry = %{
       team: "system",
-      text: "Agent summary failed: #{inspect(reason)}",
+      text: "Agent summary failed",
       kind: :error,
       at: format_now()
     }
 
-    jobs = update_summary_job(socket.assigns.summary_jobs, job_id, :failed, inspect(reason))
+    jobs = update_summary_job(socket.assigns.summary_jobs, job_id, :failed)
 
     {:noreply,
      socket
@@ -416,7 +420,7 @@ defmodule CortexWeb.RunDetailLive do
        summary_jobs: jobs,
        activities: prepend_activity(socket.assigns.activities, entry)
      )
-     |> put_flash(:error, "Agent summary failed: #{inspect(reason)}")}
+     |> put_flash(:error, "Agent summary failed — check server logs for details")}
   end
 
   def handle_info({:debug_report_result, {:ok, report}}, socket) do
@@ -645,6 +649,21 @@ defmodule CortexWeb.RunDetailLive do
           })
         end
 
+        log_path = Path.join([run.workspace_path, ".cortex", "logs", "debug-agent.log"])
+
+        # Persist to DB
+        safe_store_call(fn ->
+          Cortex.Store.create_team_run(%{
+            run_id: run_id,
+            team_name: "debug-agent",
+            role: "Debug Report — #{team_name}",
+            tier: -2,
+            status: "running",
+            log_path: log_path,
+            started_at: DateTime.utc_now()
+          })
+        end)
+
         Task.start(fn ->
           result =
             try do
@@ -658,6 +677,7 @@ defmodule CortexWeb.RunDetailLive do
               kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
             end
 
+          persist_agent_job_result(run_id, "debug-agent", result)
           send(liveview_pid, {:debug_report_result, result})
         end)
 
@@ -912,6 +932,42 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  def handle_event("stop_run", _params, socket) do
+    run = socket.assigns.run
+
+    if run && run.workspace_path do
+      killed = kill_all_processes(run.workspace_path)
+      mark_run_stopped(run)
+
+      entry = %{
+        team: "system",
+        text: "Run stopped — killed #{killed} process(es)",
+        kind: :error,
+        at: format_now()
+      }
+
+      # Re-fetch state
+      updated_run = safe_get_run(run.id)
+      team_runs = safe_get_team_runs(run.id)
+      {tiers, edges} = build_dag(updated_run || run, team_runs)
+
+      {:noreply,
+       socket
+       |> assign(
+         run: updated_run || run,
+         team_runs: team_runs,
+         tiers: tiers,
+         edges: edges,
+         coordinator_alive: false,
+         pid_status: %{},
+         activities: prepend_activity(socket.assigns.activities, entry)
+       )
+       |> put_flash(:info, "Run stopped — #{killed} process(es) killed")}
+    else
+      {:noreply, put_flash(socket, :error, "No workspace path")}
+    end
+  end
+
   def handle_event("start_coordinator", _params, socket) do
     run = socket.assigns.run
 
@@ -1000,6 +1056,11 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, summaries_expanded: !socket.assigns.summaries_expanded)}
   end
 
+  def handle_event("dismiss_summary_job", %{"id" => job_id}, socket) do
+    jobs = Enum.reject(socket.assigns.summary_jobs, &(&1.id == job_id))
+    {:noreply, assign(socket, summary_jobs: jobs)}
+  end
+
   def handle_event("request_ai_summary", _params, socket) do
     run = socket.assigns.run
     workspace_path = run && run.workspace_path
@@ -1038,6 +1099,21 @@ defmodule CortexWeb.RunDetailLive do
           })
         end
 
+        log_path = Path.join([workspace_path, ".cortex", "logs", "summary-agent.log"])
+
+        # Persist to DB
+        safe_store_call(fn ->
+          Cortex.Store.create_team_run(%{
+            run_id: run_id,
+            team_name: "summary-agent",
+            role: "Agent Summary",
+            tier: -2,
+            status: "running",
+            log_path: log_path,
+            started_at: DateTime.utc_now()
+          })
+        end)
+
         Task.start(fn ->
           result =
             try do
@@ -1052,6 +1128,7 @@ defmodule CortexWeb.RunDetailLive do
               kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
             end
 
+          persist_agent_job_result(run_id, "summary-agent", result)
           send(liveview_pid, {:ai_summary_result, job_id, result})
         end)
 
@@ -1065,7 +1142,7 @@ defmodule CortexWeb.RunDetailLive do
 
         entry = %{
           team: "system",
-          text: "Agent summary agent spawned (haiku)",
+          text: "Agent summary spawned (haiku)",
           kind: :message,
           at: format_now()
         }
@@ -1151,6 +1228,14 @@ defmodule CortexWeb.RunDetailLive do
           </span>
         </:subtitle>
         <:actions>
+          <button
+            :if={@run.status in ["running", "pending"]}
+            phx-click="stop_run"
+            data-confirm="Stop this run? All running processes will be killed."
+            class="text-sm text-red-400 hover:text-red-300 px-3 py-1 rounded border border-red-800 hover:border-red-600"
+          >
+            Stop Run
+          </button>
           <button
             phx-click="delete_run"
             data-confirm="Are you sure you want to delete this run? This cannot be undone."
@@ -1831,8 +1916,15 @@ defmodule CortexWeb.RunDetailLive do
                       <span :if={job.status == :running} class="text-gray-500 text-xs">{elapsed_since(job.started_at)}</span>
                     </div>
                     <div class="flex items-center gap-3 text-xs">
-                      <span :if={job.error} class="text-red-400 truncate max-w-xs">{job.error}</span>
                       <span class="text-gray-600">{Calendar.strftime(job.started_at, "%H:%M:%S")}</span>
+                      <button
+                        :if={job.status != :running}
+                        phx-click="dismiss_summary_job"
+                        phx-value-id={job.id}
+                        class="text-gray-600 hover:text-gray-400"
+                      >
+                        &times;
+                      </button>
                     </div>
                   </div>
                 <% end %>
@@ -2632,6 +2724,65 @@ defmodule CortexWeb.RunDetailLive do
 
   defp coordinator_result_to_attrs({:error, _}) do
     %{status: "failed", completed_at: DateTime.utc_now()}
+  end
+
+  defp persist_agent_job_result(run_id, team_name, result) do
+    status =
+      case result do
+        {:ok, _} -> "completed"
+        {:error, _} -> "failed"
+      end
+
+    safe_store_call(fn ->
+      # Find the most recent running job of this type for this run
+      import Ecto.Query
+
+      case Cortex.Repo.one(
+             from(tr in Cortex.Store.Schemas.TeamRun,
+               where: tr.run_id == ^run_id and tr.team_name == ^team_name and tr.status == "running",
+               order_by: [desc: tr.started_at],
+               limit: 1
+             )
+           ) do
+        %{} = tr -> Cortex.Store.update_team_run(tr, %{status: status, completed_at: DateTime.utc_now()})
+        nil -> :ok
+      end
+    end)
+  end
+
+  defp kill_all_processes(workspace_path) do
+    case read_registry_teams(workspace_path) do
+      {:ok, teams} ->
+        teams
+        |> Enum.map(&Map.get(&1, "pid"))
+        |> Enum.filter(&(is_integer(&1) and &1 > 0))
+        |> Enum.count(fn pid ->
+          # Send SIGTERM to the process group to kill claude and its children
+          case System.cmd("kill", ["-TERM", to_string(pid)], stderr_to_stdout: true) do
+            {_, 0} -> true
+            _ -> false
+          end
+        end)
+
+      :error ->
+        0
+    end
+  rescue
+    _ -> 0
+  end
+
+  defp mark_run_stopped(run) do
+    safe_store_call(fn ->
+      # Mark all running team_runs as stopped
+      team_runs = Cortex.Store.get_team_runs(run.id)
+
+      for tr <- team_runs, tr.status == "running" do
+        Cortex.Store.update_team_run(tr, %{status: "stopped", completed_at: DateTime.utc_now()})
+      end
+
+      # Mark the run itself as stopped
+      Cortex.Store.update_run(run, %{status: "stopped"})
+    end)
   end
 
   defp safe_get_run(id) do

@@ -150,6 +150,24 @@ defmodule Cortex.Store do
     |> Repo.one()
   end
 
+  @internal_team_names ~w(coordinator summary-agent debug-agent)
+
+  @doc "Gets all internal agent jobs (coordinator, summary-agent, debug-agent) across all runs."
+  @spec get_internal_jobs(keyword()) :: [TeamRun.t()]
+  def get_internal_jobs(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 100)
+
+    from(tr in TeamRun,
+      join: r in Run,
+      on: tr.run_id == r.id,
+      where: tr.team_name in ^@internal_team_names,
+      order_by: [desc: tr.started_at],
+      limit: ^limit,
+      preload: [:run]
+    )
+    |> Repo.all()
+  end
+
   # ── Event Logs ────────────────────────────────────────────────────
 
   @doc "Deletes a run and its associated team runs and event logs."

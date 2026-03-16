@@ -44,7 +44,7 @@ defmodule Cortex.Store.Schemas.TeamRun do
     team_run
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, ~w(pending running completed failed))
+    |> validate_inclusion(:status, ~w(pending running completed failed stopped))
     |> foreign_key_constraint(:run_id)
   end
 end

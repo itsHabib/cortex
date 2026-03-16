@@ -41,6 +41,6 @@ defmodule Cortex.Store.Schemas.Run do
     run
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, ~w(pending running completed failed))
+    |> validate_inclusion(:status, ~w(pending running completed failed stopped))
   end
 end

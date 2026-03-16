@@ -43,6 +43,7 @@ defmodule CortexWeb.Router do
     live("/runs/:id/teams/:name", TeamDetailLive, :show)
     live("/workflows", NewRunLive, :index)
     live("/gossip", GossipLive, :index)
+    live("/jobs", JobsLive, :index)
   end
 
   # Enable LiveDashboard in development
