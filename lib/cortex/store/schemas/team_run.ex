@@ -29,6 +29,7 @@ defmodule Cortex.Store.Schemas.TeamRun do
     field(:result_summary, :string)
     field(:prompt, :string)
     field(:log_path, :string)
+    field(:internal, :boolean, default: false)
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
 
@@ -38,7 +39,7 @@ defmodule Cortex.Store.Schemas.TeamRun do
   end
 
   @required_fields ~w(team_name run_id)a
-  @optional_fields ~w(role status tier cost_usd input_tokens output_tokens cache_read_tokens cache_creation_tokens duration_ms num_turns session_id result_summary prompt log_path started_at completed_at)a
+  @optional_fields ~w(role status tier cost_usd input_tokens output_tokens cache_read_tokens cache_creation_tokens duration_ms num_turns session_id result_summary prompt log_path internal started_at completed_at)a
 
   def changeset(team_run, attrs) do
     team_run

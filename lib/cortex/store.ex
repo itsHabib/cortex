@@ -81,6 +81,8 @@ defmodule Cortex.Store do
   @doc """
   Recomputes and persists a run's aggregate token/cost totals from its team_runs.
 
+  Excludes internal teams (coordinator, summary-agent, debug-agent) from totals.
+
   Use this to fix stale `total_input_tokens` values or to backfill
   cache token breakdowns added in later migrations.
   """
@@ -88,7 +90,7 @@ defmodule Cortex.Store do
   def recompute_run_totals(%Run{} = run) do
     team_runs =
       get_team_runs(run.id)
-      |> Enum.reject(fn tr -> tr.team_name in ~w(coordinator summary-agent debug-agent) end)
+      |> Enum.reject(& &1.internal)
 
     total_input =
       team_runs
@@ -128,6 +130,38 @@ defmodule Cortex.Store do
     |> Repo.insert()
   end
 
+  @doc """
+  Creates or resets an internal agent team run (summary-agent, debug-agent, coordinator).
+
+  If a record already exists for the given `(run_id, team_name)`, resets it
+  to "running" status. Otherwise creates a new one. This prevents duplicate
+  records when triggering an AI summary or debug agent multiple times.
+  """
+  @spec upsert_internal_team_run(map()) :: {:ok, TeamRun.t()} | {:error, term()}
+  def upsert_internal_team_run(attrs) do
+    run_id = attrs[:run_id] || attrs["run_id"]
+    team_name = attrs[:team_name] || attrs["team_name"]
+
+    case get_team_run(run_id, team_name) do
+      nil ->
+        create_team_run(Map.put(attrs, :internal, true))
+
+      existing ->
+        update_team_run(existing, %{
+          status: "running",
+          started_at: DateTime.utc_now(),
+          completed_at: nil,
+          input_tokens: nil,
+          output_tokens: nil,
+          cache_read_tokens: nil,
+          cache_creation_tokens: nil,
+          cost_usd: 0.0,
+          duration_ms: nil,
+          session_id: nil
+        })
+    end
+  end
+
   @doc "Updates an existing team run."
   def update_team_run(%TeamRun{} = team_run, attrs) do
     team_run
@@ -139,6 +173,16 @@ defmodule Cortex.Store do
   def get_team_runs(run_id) do
     from(tr in TeamRun,
       where: tr.run_id == ^run_id,
+      order_by: [asc: tr.tier, asc: tr.team_name]
+    )
+    |> Repo.all()
+  end
+
+  @doc "Gets non-internal team runs for a given run."
+  @spec get_external_team_runs(String.t()) :: [TeamRun.t()]
+  def get_external_team_runs(run_id) do
+    from(tr in TeamRun,
+      where: tr.run_id == ^run_id and tr.internal == false,
       order_by: [asc: tr.tier, asc: tr.team_name]
     )
     |> Repo.all()
@@ -166,7 +210,7 @@ defmodule Cortex.Store do
     from(tr in TeamRun,
       join: r in Run,
       on: tr.run_id == r.id,
-      where: tr.team_name in ^@internal_team_names,
+      where: tr.internal == true,
       order_by: [desc: tr.started_at],
       limit: ^limit,
       preload: [:run]

@@ -834,11 +834,12 @@ defmodule Cortex.Gossip.SessionRunner do
   defp create_coordinator_team_run(nil, _prompt, _log_path), do: :ok
 
   defp create_coordinator_team_run(run_id, prompt, log_path) do
-    Cortex.Store.create_team_run(%{
+    Cortex.Store.upsert_internal_team_run(%{
       run_id: run_id,
       team_name: "coordinator",
       role: "Gossip Coordinator",
       tier: -1,
+      internal: true,
       status: "running",
       prompt: prompt,
       log_path: log_path,

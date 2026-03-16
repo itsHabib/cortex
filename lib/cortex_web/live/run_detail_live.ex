@@ -71,14 +71,10 @@ defmodule CortexWeb.RunDetailLive do
 
       run ->
         team_runs = safe_get_team_runs(run.id)
-        {tiers, edges} = build_dag(run, team_runs)
+        external_runs = Enum.reject(team_runs, & &1.internal)
+        {tiers, edges} = build_dag(run, external_runs)
         team_members = extract_team_members(run)
-        internal = Cortex.Store.internal_team_names()
-
-        team_names =
-          team_runs
-          |> Enum.map(& &1.team_name)
-          |> Enum.reject(&(&1 in internal))
+        team_names = Enum.map(external_runs, & &1.team_name)
 
         coordinator_alive =
           Runner.coordinator_alive?(run.id)
@@ -147,7 +143,8 @@ defmodule CortexWeb.RunDetailLive do
       run ->
         updated_run = safe_get_run(run.id)
         team_runs = safe_get_team_runs(run.id)
-        {tiers, edges} = build_dag(updated_run || run, team_runs)
+        external_runs = Enum.reject(team_runs, & &1.internal)
+        {tiers, edges} = build_dag(updated_run || run, external_runs)
 
         coordinator_alive =
           Runner.coordinator_alive?(run.id)
@@ -155,7 +152,7 @@ defmodule CortexWeb.RunDetailLive do
         # Auto-generate summary on tier/run completion (with full diagnostics)
         run_summary =
           if type in [:tier_completed, :run_completed] do
-            build_run_summary(updated_run || run, team_runs, socket.assigns.last_seen,
+            build_run_summary(updated_run || run, external_runs, socket.assigns.last_seen,
               include_diagnostics: true
             )
           else
@@ -173,10 +170,7 @@ defmodule CortexWeb.RunDetailLive do
          assign(socket,
            run: updated_run || run,
            team_runs: team_runs,
-           team_names:
-             team_runs
-             |> Enum.map(& &1.team_name)
-             |> Enum.reject(&(&1 in Cortex.Store.internal_team_names())),
+           team_names: Enum.map(external_runs, & &1.team_name),
            tiers: tiers,
            edges: edges,
            coordinator_alive: coordinator_alive,
@@ -661,11 +655,12 @@ defmodule CortexWeb.RunDetailLive do
 
         # Persist to DB
         safe_store_call(fn ->
-          Cortex.Store.create_team_run(%{
+          Cortex.Store.upsert_internal_team_run(%{
             run_id: run_id,
             team_name: "debug-agent",
             role: "Debug Report — #{team_name}",
             tier: -2,
+            internal: true,
             status: "running",
             log_path: log_path,
             started_at: DateTime.utc_now()
@@ -1111,11 +1106,12 @@ defmodule CortexWeb.RunDetailLive do
 
         # Persist to DB
         safe_store_call(fn ->
-          Cortex.Store.create_team_run(%{
+          Cortex.Store.upsert_internal_team_run(%{
             run_id: run_id,
             team_name: "summary-agent",
             role: "Agent Summary",
             tier: -2,
+            internal: true,
             status: "running",
             log_path: log_path,
             started_at: DateTime.utc_now()
@@ -2559,11 +2555,12 @@ defmodule CortexWeb.RunDetailLive do
         callbacks = build_coordinator_callbacks(run_id, cortex_path)
 
         safe_store_call(fn ->
-          Cortex.Store.create_team_run(%{
+          Cortex.Store.upsert_internal_team_run(%{
             run_id: run_id,
             team_name: "coordinator",
             role: "Gossip Coordinator",
             tier: -1,
+            internal: true,
             status: "running",
             prompt: prompt,
             log_path: log_path,
@@ -2612,11 +2609,12 @@ defmodule CortexWeb.RunDetailLive do
     callbacks = build_coordinator_callbacks(run_id, cortex_path)
 
     safe_store_call(fn ->
-      Cortex.Store.create_team_run(%{
+      Cortex.Store.upsert_internal_team_run(%{
         run_id: run_id,
         team_name: "coordinator",
         role: "Runtime Coordinator",
         tier: -1,
+        internal: true,
         status: "running",
         prompt: prompt,
         log_path: log_path,
@@ -2912,7 +2910,9 @@ defmodule CortexWeb.RunDetailLive do
 
   defp has_stalled_teams?(team_runs, run_status, last_seen, pid_status) do
     run_status in ["running", "failed"] and
-      Enum.any?(team_runs, fn tr -> team_stalled?(tr, last_seen, pid_status) end)
+      team_runs
+      |> Enum.reject(& &1.internal)
+      |> Enum.any?(fn tr -> team_stalled?(tr, last_seen, pid_status) end)
   end
 
   defp team_stalled?(team_run, last_seen, pid_status) do
@@ -2947,7 +2947,9 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp count_stalled(team_runs, last_seen, pid_status) do
-    Enum.count(team_runs, fn tr -> team_stalled?(tr, last_seen, pid_status) end)
+    team_runs
+    |> Enum.reject(& &1.internal)
+    |> Enum.count(fn tr -> team_stalled?(tr, last_seen, pid_status) end)
   end
 
   defp count_active_running(team_runs, last_seen, pid_status) do
@@ -3192,7 +3194,10 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp sum_team_field(team_runs, field) do
-    team_runs |> Enum.map(&(Map.get(&1, field) || 0)) |> Enum.sum()
+    team_runs
+    |> Enum.reject(& &1.internal)
+    |> Enum.map(&(Map.get(&1, field) || 0))
+    |> Enum.sum()
   end
 
   defp prepend_activity(activities, entry) do
