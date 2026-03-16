@@ -6,6 +6,7 @@ defmodule CortexWeb.RunDetailLive do
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Orchestration.Config.Loader, as: ConfigLoader
   alias Cortex.Orchestration.DAG
+  alias Cortex.Orchestration.DebugAgent
   alias Cortex.Orchestration.Injection
   alias Cortex.Orchestration.LogParser
   alias Cortex.Orchestration.Runner
@@ -48,6 +49,8 @@ defmodule CortexWeb.RunDetailLive do
            team_inbox: [],
            diagnostics_team: nil,
            diagnostics_report: nil,
+           debug_report: nil,
+           debug_loading: false,
            coordinator_expanded: false,
            coordinator_log: nil,
            coordinator_inbox: [],
@@ -95,6 +98,8 @@ defmodule CortexWeb.RunDetailLive do
            team_inbox: [],
            diagnostics_team: nil,
            diagnostics_report: nil,
+           debug_report: nil,
+           debug_loading: false,
            coordinator_alive: coordinator_alive,
            coordinator_expanded: false,
            coordinator_log: nil,
@@ -412,6 +417,31 @@ defmodule CortexWeb.RunDetailLive do
      |> put_flash(:error, "AI summary failed: #{inspect(reason)}")}
   end
 
+  def handle_info({:debug_report_result, {:ok, report}}, socket) do
+    entry = %{
+      team: "system",
+      text: "Debug report complete for #{report.team}",
+      kind: :message,
+      at: format_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(
+       debug_loading: false,
+       debug_report: report,
+       activities: prepend_activity(socket.assigns.activities, entry)
+     )
+     |> put_flash(:info, "Debug report ready for #{report.team}")}
+  end
+
+  def handle_info({:debug_report_result, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(debug_loading: false)
+     |> put_flash(:error, "Debug report failed: #{inspect(reason)}")}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # -- Event handlers: tab switching --
@@ -558,13 +588,13 @@ defmodule CortexWeb.RunDetailLive do
   # -- Event handlers: diagnostics team selection --
 
   def handle_event("select_diag_team", %{"team" => ""}, socket) do
-    {:noreply, assign(socket, diagnostics_team: nil, diagnostics_report: nil)}
+    {:noreply, assign(socket, diagnostics_team: nil, diagnostics_report: nil, debug_report: nil)}
   end
 
   def handle_event("select_diag_team", %{"team" => team_name}, socket) do
     team_status = get_team_status(socket.assigns.team_runs, team_name)
     report = load_diagnostics(socket.assigns.run, team_name, team_status: team_status)
-    {:noreply, assign(socket, diagnostics_team: team_name, diagnostics_report: report)}
+    {:noreply, assign(socket, diagnostics_team: team_name, diagnostics_report: report, debug_report: nil)}
   end
 
   def handle_event("refresh_diagnostics", _params, socket) do
@@ -579,6 +609,60 @@ defmodule CortexWeb.RunDetailLive do
       {:noreply, assign(socket, diagnostics_report: report)}
     else
       {:noreply, socket}
+    end
+  end
+
+  def handle_event("request_debug_report", _params, socket) do
+    run = socket.assigns.run
+    team_name = socket.assigns.diagnostics_team
+
+    cond do
+      not (run && run.workspace_path && team_name) ->
+        {:noreply, put_flash(socket, :error, "No workspace or team selected")}
+
+      socket.assigns.debug_loading ->
+        {:noreply, put_flash(socket, :info, "Debug report already in progress...")}
+
+      true ->
+        liveview_pid = self()
+        run_id = run.id
+
+        on_activity = fn name, activity ->
+          Cortex.Events.broadcast(:team_activity, %{
+            run_id: run_id,
+            team_name: name,
+            type: activity.type,
+            tools: Map.get(activity, :tools, []),
+            details: Map.get(activity, :details, []),
+            timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+          })
+        end
+
+        Task.start(fn ->
+          result =
+            DebugAgent.analyze(run.workspace_path, team_name,
+              run_name: run.name || "Untitled",
+              on_activity: on_activity
+            )
+
+          send(liveview_pid, {:debug_report_result, result})
+        end)
+
+        entry = %{
+          team: "system",
+          text: "Debug agent spawned for #{team_name} (haiku)",
+          kind: :message,
+          at: format_now()
+        }
+
+        {:noreply,
+         socket
+         |> assign(
+           debug_loading: true,
+           debug_report: nil,
+           activities: prepend_activity(socket.assigns.activities, entry)
+         )
+         |> put_flash(:info, "Generating debug report for #{team_name}...")}
     end
   end
 
@@ -1848,6 +1932,34 @@ defmodule CortexWeb.RunDetailLive do
                 </span>
                 <span>{report.line_count} log lines</span>
               </div>
+            </div>
+
+            <!-- AI Debug Report -->
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">AI Debug Report</h3>
+                <button
+                  :if={@run && @run.workspace_path}
+                  phx-click="request_debug_report"
+                  disabled={@debug_loading}
+                  class={[
+                    "rounded px-4 py-2 text-sm font-medium transition-colors",
+                    if(@debug_loading,
+                      do: "bg-gray-700 text-gray-400 cursor-wait",
+                      else: "bg-red-600 text-white hover:bg-red-500"
+                    )
+                  ]}
+                >
+                  {if @debug_loading, do: "Analyzing...", else: "Generate Debug Report"}
+                </button>
+              </div>
+              <%= if @debug_report do %>
+                <div class="bg-gray-950 rounded p-4 max-h-[50vh] overflow-y-auto">
+                  <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@debug_report.content}</pre>
+                </div>
+              <% else %>
+                <p class="text-gray-500 text-sm">Spawns a haiku agent to analyze the team's log and produce a root cause analysis.</p>
+              <% end %>
             </div>
 
             <!-- Resume / Restart buttons for this specific team (hide when team is actively running) -->
