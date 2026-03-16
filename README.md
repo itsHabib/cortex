@@ -1,60 +1,61 @@
 # Cortex
 
-Multi-agent orchestration system built on Elixir/OTP. Cortex manages teams of AI agents that collaborate on complex, multi-step objectives via `claude -p` processes. It supports two coordination modes: **DAG orchestration** for structured, dependency-aware execution, and **gossip protocol** for emergent, decentralized knowledge sharing.
+Multi-agent orchestration system built on Elixir/OTP. Cortex manages teams of AI agents that collaborate on complex, multi-step objectives via `claude -p` processes.
+
+It supports two coordination modes: **DAG orchestration** for structured, dependency-aware execution, and **gossip protocol** for emergent, decentralized knowledge sharing.
+
+<!-- TODO: Add demo video / screenshots here -->
+
+## Why Elixir?
+
+Running dozens of long-lived AI agent processes, routing messages between them, detecting failures, and streaming real-time updates to a dashboard — this is exactly what OTP was built for. Cortex uses supervision trees for fault tolerance, GenServers for per-agent state, Erlang ports for process management, PubSub for event streaming, and Phoenix LiveView for a real-time dashboard with zero polling. Every piece of infrastructure that would need to be hand-rolled in other stacks comes out of the box.
 
 ## Features
 
 ### Orchestration
-- **DAG-based execution** -- define teams with dependencies in YAML, execute in parallel tiers using Kahn's algorithm
-- **Continue Run** -- pick up interrupted runs where the Runner left off (terminal closed, node crash). Reads config from DB, skips completed teams, re-executes remaining tiers with full context injection
-- **Resume sessions** -- resume stalled `claude -p` sessions via `claude --resume <session_id>`, extracted from NDJSON logs
-- **Restart with context** -- spawn fresh sessions for expired ones, injecting log history so agents know what was already done
-- **File-based messaging** -- inbox/outbox per team, outbox watcher polls for progress messages, coordinator can send messages mid-run
+- **DAG-based execution** — define teams with dependencies in YAML, execute in parallel tiers via Kahn's algorithm
+- **Fault recovery** — continue interrupted runs (skips completed teams), resume stalled sessions via `claude --resume`, or restart with injected log history
+- **File-based messaging** — inbox/outbox per team, outbox watcher polls for progress, coordinator can message teams mid-run
 
 ### Observability
-- **Live token tracking** -- spawner parses intermediate NDJSON usage, streams to LiveView via PubSub in real-time
-- **Activity feed** -- tool use events extracted from NDJSON, displayed as real-time feed on run detail page
-- **Coordinator status** -- Runner processes register in Elixir Registry; dashboard shows alive/dead with auto-cleanup on process death
-- **Stalled detection** -- per-team last_seen timestamps; teams flagged stalled after 5 minutes of no PubSub events
-- **Diagnostics tab** -- LogParser parses NDJSON logs into structured timelines with auto-diagnosis (died during tool, hit max turns, no session, etc.)
-- **Auto-generated summaries** -- run summary auto-builds on tier completion, includes per-team status, tokens, and diagnostics
-- **Telemetry + Prometheus** -- structured telemetry events for runs, tiers, teams, tools; Prometheus scraping via `/metrics`
-- **Grafana dashboards** -- pre-configured dashboards (start with `make up` for Phoenix + Prometheus + Grafana stack)
+- **Live token tracking** — NDJSON usage parsed in real-time, streamed to LiveView via PubSub
+- **Activity feed** — tool use events extracted from agent output, displayed as a live timeline
+- **Stalled detection** — teams flagged after 5 minutes of silence, with per-team health indicators
+- **Diagnostics** — LogParser structures NDJSON into timelines with auto-diagnosis (died during tool use, hit max turns, rate limited, no session, etc.)
+- **Telemetry + Prometheus + Grafana** — structured telemetry events, `/metrics` endpoint, pre-configured dashboards
 
 ### Gossip Protocol
-- **CRDT-backed knowledge stores** -- per-agent KnowledgeStore GenServers with vector clocks for conflict-free convergence
-- **Push-pull exchange** -- agents compare digests, identify missing/newer entries, merge with causal ordering
-- **Topology strategies** -- full mesh, ring, and random-k peering
-- **Coordinator mode** -- file-based agent I/O with configurable exchange rounds
+- **CRDT-backed knowledge stores** — per-agent GenServers with vector clocks for conflict-free convergence
+- **Push-pull exchange** — agents compare digests, fetch missing/newer entries, merge with causal ordering
+- **Topology strategies** — full mesh, ring, and random-k peering
 
-### Dashboard (LiveView)
-- **Run detail** -- 5 tabs: Overview, Activity, Messages, Logs, Diagnostics
-- **Overview tab** -- coordinator status card, status grid (pending/running/stalled/done/failed), DAG visualization, team cards with tokens and health indicators
-- **Messages tab** -- per-team inbox/outbox viewer with send message form
-- **Logs tab** -- raw NDJSON log viewer with collapsible parsed JSON, sort toggle
-- **Diagnostics tab** -- event timeline, diagnosis banner, per-team resume/restart buttons
-- **Team detail** -- individual team page with prompt, logs, resume/restart/mark-failed actions
-- **Gossip view** -- interactive topology visualization, round-by-round knowledge propagation
+### Dashboard (Phoenix LiveView)
+- **Run detail** — 5 tabs: Overview, Activity, Messages, Logs, Diagnostics
+- **Overview** — coordinator status, status grid (pending/running/stalled/done/failed), DAG visualization, token counters
+- **Messages** — per-team inbox/outbox viewer with send form
+- **Diagnostics** — event timeline, diagnosis banners, resume/restart buttons per team
+- **Team detail** — individual team page with prompt, logs, and recovery actions
+- **Gossip view** — topology visualization with round-by-round knowledge propagation
 
 ### Infrastructure
-- **Pluggable tool system** -- sandboxed tool execution with timeout enforcement and crash isolation
-- **Persistent event log** -- all orchestration events stored in SQLite via Ecto
-- **Idle liveness checks** -- spawner checks if port process is alive every 2 minutes, catches silent deaths
+- **Pluggable tool system** — sandboxed execution with timeouts and crash isolation
+- **Persistent event log** — all orchestration events stored in SQLite via Ecto
+- **Liveness checks** — spawner monitors port processes every 2 minutes, catches silent deaths
 
 ## Quick Start
 
 ### Prerequisites
 
-- Elixir 1.17+
-- Erlang/OTP 27+
+- Elixir 1.19+
+- Erlang/OTP 28+
+- [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) (`claude -p` must be available)
 
 ### Setup
 
 ```bash
 git clone <repo-url> && cd cortex
 mix deps.get
-mix ecto.create
-mix ecto.migrate
+mix ecto.create && mix ecto.migrate
 mix test
 ```
 
@@ -62,13 +63,13 @@ mix test
 
 ```bash
 mix phx.server
-# Visit http://localhost:4000
+# http://localhost:4000
 ```
 
 ### Run an orchestration
 
 ```bash
-# Dry run (show execution plan without spawning)
+# Dry run — show execution plan without spawning agents
 mix run -e 'Cortex.Orchestration.Runner.run("orchestra.yaml", dry_run: true) |> IO.inspect()'
 
 # Full run
@@ -77,11 +78,11 @@ mix run -e 'Cortex.Orchestration.Runner.run("orchestra.yaml") |> IO.inspect()'
 # Resume stalled teams in an existing workspace
 mix cortex.resume /path/to/workspace
 
-# Resume with auto-retry on rate limits
+# Auto-retry on rate limits
 mix cortex.resume /path/to/workspace --auto-retry --retry-delay 120
 ```
 
-### Start with Grafana stack
+### Full stack (with Grafana)
 
 ```bash
 make up    # Phoenix:4000 + Prometheus:9090 + Grafana:3000 (admin/cortex)
@@ -89,23 +90,23 @@ make up    # Phoenix:4000 + Prometheus:9090 + Grafana:3000 (admin/cortex)
 
 ## Configuration
 
-Cortex projects are defined in `orchestra.yaml` files:
+Projects are defined in YAML:
 
 ```yaml
 name: "my-project"
 workspace_path: /tmp/my-project
 
 defaults:
-  model: sonnet                  # LLM model (default: sonnet)
-  max_turns: 200                 # Max conversation turns per agent
-  permission_mode: acceptEdits   # How agents handle file edits
-  timeout_minutes: 30            # Per-team timeout
+  model: sonnet
+  max_turns: 200
+  permission_mode: acceptEdits
+  timeout_minutes: 30
 
 teams:
   - name: backend
     lead:
       role: "Backend Engineer"
-      model: opus                # Optional per-team model override
+      model: opus                # per-team model override
     members:
       - role: "Database Expert"
         focus: "Schema design and migrations"
@@ -124,26 +125,26 @@ teams:
     tasks:
       - summary: "Build the web UI"
     depends_on:
-      - backend               # Waits for backend to complete
+      - backend               # waits for backend to complete
 ```
 
-### Configuration Fields
+### Config Reference
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `name` | Yes | -- | Project name |
+| `name` | Yes | — | Project name |
 | `workspace_path` | No | `"."` | Directory for `.cortex/` workspace |
 | `defaults.model` | No | `"sonnet"` | Default LLM model |
 | `defaults.max_turns` | No | `200` | Max conversation turns |
-| `defaults.permission_mode` | No | `"acceptEdits"` | Permission mode |
+| `defaults.permission_mode` | No | `"acceptEdits"` | Permission mode for file edits |
 | `defaults.timeout_minutes` | No | `30` | Per-team timeout |
-| `teams[].name` | Yes | -- | Unique team identifier |
-| `teams[].lead.role` | Yes | -- | Team lead role description |
+| `teams[].name` | Yes | — | Unique team identifier |
+| `teams[].lead.role` | Yes | — | Team lead role description |
 | `teams[].lead.model` | No | project default | Model override |
-| `teams[].members` | No | `[]` | Team member list |
-| `teams[].tasks` | Yes | -- | At least one task |
-| `teams[].depends_on` | No | `[]` | Team name dependencies |
-| `teams[].context` | No | `nil` | Additional prompt context |
+| `teams[].members` | No | `[]` | Additional team members |
+| `teams[].tasks` | Yes | — | At least one task |
+| `teams[].depends_on` | No | `[]` | Team dependencies (by name) |
+| `teams[].context` | No | — | Additional prompt context |
 
 ## Architecture
 
@@ -151,17 +152,17 @@ teams:
 
 ```
 Cortex.Supervisor (one_for_one)
-  |-- Phoenix.PubSub (Cortex.PubSub)
-  |-- Registry (Cortex.Agent.Registry)
-  |-- DynamicSupervisor (Cortex.Agent.Supervisor)
-  |-- Task.Supervisor (Cortex.Tool.Supervisor)
-  |-- Cortex.Tool.Registry (Agent)
-  |-- Registry (Cortex.Orchestration.RunnerRegistry)
-  |-- Registry (Cortex.Messaging.MailboxRegistry)
-  |-- Cortex.Messaging.Router
-  |-- Cortex.Messaging.Supervisor
-  |-- Cortex.Repo (Ecto/SQLite)
-  |-- Cortex.Store.EventSink
+  |-- Phoenix.PubSub
+  |-- Registry (Agent.Registry)
+  |-- DynamicSupervisor (Agent.Supervisor)
+  |-- Task.Supervisor (Tool.Supervisor)
+  |-- Tool.Registry (Agent)
+  |-- Registry (RunnerRegistry)
+  |-- Registry (MailboxRegistry)
+  |-- Messaging.Router
+  |-- Messaging.Supervisor
+  |-- Repo (Ecto/SQLite)
+  |-- Store.EventSink
   |-- CortexWeb.Telemetry
   |-- TelemetryMetricsPrometheus.Core
   |-- CortexWeb.Endpoint (Phoenix)
@@ -169,83 +170,75 @@ Cortex.Supervisor (one_for_one)
 
 ### DAG Orchestration (`lib/cortex/orchestration/`)
 
-The orchestration engine loads YAML configs, builds a dependency DAG using Kahn's algorithm, and executes teams in parallel tiers. Each team spawns an external `claude -p` process via Erlang ports, streams NDJSON output for real-time token/activity tracking, and records results to both the workspace (`.cortex/state.json`) and the DB.
+The engine loads YAML configs, builds a dependency DAG via Kahn's algorithm, and executes teams in parallel tiers. Each team spawns a `claude -p` process through Erlang ports, streams NDJSON for real-time tracking, and records results to both the workspace and DB.
 
 Key modules:
-- **Runner** -- top-level orchestrator: `run/2`, `continue_run/2`, `resume_run/2`, `coordinator_alive?/1`
-- **DAG** -- Kahn's algorithm for topological sort into execution tiers
-- **Spawner** -- spawns `claude -p` via ports, parses NDJSON, extracts session IDs, detects rate limits
-- **Workspace** -- manages `.cortex/` directory: `state.json`, `registry.json`, per-team logs and results
-- **Injection** -- builds rich prompts with role, tasks, upstream team results, inbox instructions
-- **LogParser** -- parses NDJSON logs into structured timelines with auto-diagnosis
-- **Config.Loader** -- YAML parsing and validation into typed Config structs
+- **Runner** — orchestrator: `run/2`, `continue_run/2`, `resume_run/2`
+- **DAG** — topological sort into execution tiers
+- **Spawner** — port-based process management, NDJSON parsing, session ID extraction, rate limit detection
+- **Workspace** — `.cortex/` directory management (state, registry, logs, results, messages)
+- **Injection** — prompt construction with role, tasks, upstream results, inbox instructions
+- **LogParser** — NDJSON log parsing with auto-diagnosis
+- **Config.Loader** — YAML validation into typed structs
 
 ### Gossip Protocol (`lib/cortex/gossip/`)
 
-Agents in gossip mode each have a KnowledgeStore (GenServer) holding entries with vector clocks. The gossip protocol performs push-pull exchanges: agents compare digests, identify missing/newer entries, and merge with causal ordering. Concurrent conflicts are resolved by confidence score, then timestamp.
+Each agent has a KnowledgeStore GenServer holding entries with vector clocks. Push-pull exchanges compare digests, transfer missing/newer entries, and merge with causal ordering. Concurrent conflicts resolve by confidence score, then timestamp.
 
 ### Messaging (`lib/cortex/messaging/`)
 
-File-based messaging (InboxBridge) for team coordination during runs, plus an in-process messaging system (Router, Mailbox, Bus) for agent-to-agent communication.
+File-based messaging (InboxBridge) for team coordination during runs, plus an in-process system (Router, Mailbox, Bus) for agent-to-agent communication.
 
-### Web Dashboard (`lib/cortex_web/live/`)
+### Dashboard (`lib/cortex_web/live/`)
 
-Phoenix LiveView provides a real-time dashboard. All pages subscribe to PubSub events for live updates without polling.
+Phoenix LiveView with real-time PubSub subscriptions — no polling.
 
-- **DashboardLive** -- system overview, recent runs
-- **RunListLive** -- filterable run history
-- **RunDetailLive** -- tabbed run view (overview, activity, messages, logs, diagnostics)
-- **TeamDetailLive** -- individual team inspection with resume/restart/mark-failed
-- **NewRunLive** -- launch runs from the web UI
-- **GossipLive** -- gossip session viewer with topology visualization
+- **DashboardLive** — system overview, recent runs
+- **RunListLive** — filterable run history with sort and delete
+- **RunDetailLive** — tabbed run view (overview, activity, messages, logs, diagnostics)
+- **TeamDetailLive** — individual team inspection with recovery actions
+- **NewRunLive** — launch runs from the browser
+- **GossipLive** — gossip topology visualization
 
 ### Persistence (`lib/cortex/store/`)
 
-Ecto with SQLite stores run history, team results, and event logs. The EventSink GenServer subscribes to PubSub and persists events automatically.
-
-Schemas: `Run`, `TeamRun`, `EventLog`
+Ecto with SQLite. EventSink subscribes to PubSub and persists events automatically. Schemas: `Run`, `TeamRun`, `EventLog`.
 
 ## Workspace Layout
 
-When a run executes, it creates a `.cortex/` directory:
+Each run creates a `.cortex/` directory:
 
 ```
 .cortex/
-  state.json          # Per-team status, result summaries, token counts
-  registry.json       # Team registry: names, session IDs, timestamps
+  state.json          # per-team status, result summaries, token counts
+  registry.json       # team registry: names, session IDs, timestamps
   results/
-    <team>.json       # Full result per team
+    <team>.json       # full result per team
   logs/
-    <team>.log        # Raw NDJSON output from claude -p
+    <team>.log        # raw NDJSON from claude -p
   messages/
     <team>/
-      inbox.json      # Messages received by team
-      outbox.json     # Messages sent by team
-```
-
-## Running Tests
-
-```bash
-mix test                              # All tests (671 tests, ~8s)
-mix test --trace                      # Verbose output
-mix test test/cortex/orchestration/   # Specific directory
-mix test --cover                      # With coverage
-```
-
-## Benchmarks
-
-```bash
-mix run bench/agent_bench.exs    # Agent lifecycle benchmarks
-mix run bench/gossip_bench.exs   # Gossip protocol benchmarks
-mix run bench/dag_bench.exs      # DAG engine benchmarks
+      inbox.json      # messages received
+      outbox.json     # messages sent
 ```
 
 ## Development
 
 ```bash
-mix format                       # Format code
-mix format --check-formatted     # Check formatting (CI)
-mix compile --warnings-as-errors # Compile check (CI)
+mix test                              # run all tests
+mix test --trace                      # verbose output
+mix test test/cortex/orchestration/   # specific directory
+mix format                            # format code
+mix compile --warnings-as-errors      # compile check
+mix credo --strict                    # lint
+```
+
+### Benchmarks
+
+```bash
+mix run bench/agent_bench.exs         # agent lifecycle
+mix run bench/gossip_bench.exs        # gossip protocol
+mix run bench/dag_bench.exs           # DAG engine
 ```
 
 ## Project Structure
@@ -257,22 +250,21 @@ cortex/
   lib/
     cortex/
       agent/                      # Agent GenServer, Config, State, Registry
+      coordinator/                # Coordinator prompt building
       gossip/                     # KnowledgeStore, Protocol, VectorClock, Topology
       messaging/                  # InboxBridge, OutboxWatcher, Router, Mailbox, Bus
       orchestration/              # Runner, DAG, Spawner, Workspace, Config, LogParser
       perf/                       # Profiler utilities
-      store/                      # Ecto schemas (Run, TeamRun, EventLog), EventSink
+      store/                      # Ecto schemas, EventSink
       tool/                       # Tool behaviour, executor, registry
-      application.ex              # OTP application and supervision tree
-      events.ex                   # PubSub event broadcasting
-      health.ex                   # System health checks
-      telemetry.ex                # Telemetry event definitions
     cortex_web/
       components/                 # Phoenix components (core, DAG)
-      live/                       # LiveView modules (dashboard, runs, teams, gossip)
-      endpoint.ex                 # Phoenix endpoint
-      router.ex                   # Route definitions
+      live/                       # LiveView pages
   priv/
     repo/migrations/              # Ecto migrations
-  test/                           # Test suite (mirrors lib/ structure)
+  test/                           # mirrors lib/ structure
 ```
+
+## License
+
+MIT

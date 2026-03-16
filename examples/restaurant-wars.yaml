@@ -1,0 +1,150 @@
+name: "restaurant-wars"
+
+defaults:
+  model: sonnet
+  max_turns: 100
+  permission_mode: bypassPermissions
+  timeout_minutes: 10
+
+teams:
+  # --- Tier 0: Two rival chef teams design their restaurants in parallel ---
+  - name: fuego
+    lead:
+      role: "Head Chef — Team Fuego"
+    tasks:
+      - summary: "Design a complete restaurant concept and tasting menu"
+        details: |
+          You are the head chef of Team Fuego. Create a bold, original restaurant concept:
+
+          1. Restaurant name, theme, and vibe (decor, music, target clientele)
+          2. A 5-course tasting menu with dish names, descriptions, and key techniques
+          3. Signature cocktail or drink pairing for each course
+          4. Plating philosophy and presentation style
+          5. What makes your restaurant unforgettable
+
+          Be creative, specific, and passionate. This is a competition — you need to
+          blow the judges away. Write everything to fuego-menu.md.
+        deliverables:
+          - "fuego-menu.md"
+    depends_on: []
+
+  - name: umami
+    lead:
+      role: "Head Chef — Team Umami"
+    tasks:
+      - summary: "Design a complete restaurant concept and tasting menu"
+        details: |
+          You are the head chef of Team Umami. Create a bold, original restaurant concept:
+
+          1. Restaurant name, theme, and vibe (decor, music, target clientele)
+          2. A 5-course tasting menu with dish names, descriptions, and key techniques
+          3. Signature cocktail or drink pairing for each course
+          4. Plating philosophy and presentation style
+          5. What makes your restaurant unforgettable
+
+          Be creative, specific, and passionate. This is a competition — you need to
+          blow the judges away. Write everything to umami-menu.md.
+        deliverables:
+          - "umami-menu.md"
+    depends_on: []
+
+  # --- Tier 1: Critic previews both restaurants and gives feedback ---
+  - name: critic-preview
+    lead:
+      role: "Restaurant Critic"
+    tasks:
+      - summary: "Review both restaurant concepts and provide detailed feedback"
+        details: |
+          You are a Michelin-star restaurant critic doing a preview review of two
+          competing restaurant concepts. Read both teams' menus carefully.
+
+          For EACH restaurant, score and critique:
+          - Concept & Theme (1-10): originality, coherence, marketability
+          - Menu Creativity (1-10): dish originality, technique ambition, flavor profiles
+          - Drink Program (1-10): pairing logic, creativity, execution
+          - Presentation (1-10): plating philosophy, visual storytelling
+          - The X-Factor (1-10): what sets it apart, would you go back?
+
+          Give specific, constructive feedback for each team. Tell them exactly what
+          to improve, what to cut, and what to double down on. Be tough but fair.
+          Write your review to critic-preview.md.
+        deliverables:
+          - "critic-preview.md"
+    depends_on:
+      - fuego
+      - umami
+
+  # --- Tier 2: Both teams revise based on critic feedback ---
+  - name: fuego-revised
+    lead:
+      role: "Head Chef — Team Fuego (Final Round)"
+    tasks:
+      - summary: "Revise your restaurant concept based on critic feedback"
+        details: |
+          The critic has reviewed your restaurant. Read their feedback carefully.
+
+          Now produce your FINAL restaurant concept:
+          1. Address every piece of criticism — explain what you changed and why
+          2. Revised 5-course tasting menu (keep what worked, fix what didn't)
+          3. Updated drink pairings
+          4. Any new additions inspired by the feedback
+          5. Your closing argument: why Fuego should win
+
+          Write your final concept to fuego-final.md.
+        deliverables:
+          - "fuego-final.md"
+    depends_on:
+      - critic-preview
+
+  - name: umami-revised
+    lead:
+      role: "Head Chef — Team Umami (Final Round)"
+    tasks:
+      - summary: "Revise your restaurant concept based on critic feedback"
+        details: |
+          The critic has reviewed your restaurant. Read their feedback carefully.
+
+          Now produce your FINAL restaurant concept:
+          1. Address every piece of criticism — explain what you changed and why
+          2. Revised 5-course tasting menu (keep what worked, fix what didn't)
+          3. Updated drink pairings
+          4. Any new additions inspired by the feedback
+          5. Your closing argument: why Umami should win
+
+          Write your final concept to umami-final.md.
+        deliverables:
+          - "umami-final.md"
+    depends_on:
+      - critic-preview
+
+  # --- Tier 3: Final judgement ---
+  - name: final-judgement
+    lead:
+      role: "Head Judge"
+    tasks:
+      - summary: "Deliver the final verdict on Restaurant Wars"
+        details: |
+          You are the head judge of Restaurant Wars. You have seen both teams'
+          original concepts, the critic's preview, and the revised final menus.
+
+          Deliver your FINAL JUDGEMENT:
+
+          1. Side-by-side comparison across all categories:
+             - Concept & Theme
+             - Menu Creativity & Technique
+             - Drink Program
+             - Presentation & Plating
+             - Growth from Feedback (how well did they respond to criticism?)
+             - The X-Factor
+
+          2. Highlight the single best dish across both restaurants
+          3. Highlight the single best drink pairing
+          4. Call out the biggest missed opportunity
+          5. Declare the WINNER with a clear explanation of why
+
+          Be dramatic. This is the finale. Write your verdict to final-judgement.md.
+        deliverables:
+          - "final-judgement.md"
+    depends_on:
+      - fuego-revised
+      - umami-revised

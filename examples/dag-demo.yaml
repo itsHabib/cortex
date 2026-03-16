@@ -1,0 +1,98 @@
+name: "dag-demo"
+
+defaults:
+  model: haiku
+  max_turns: 20
+  permission_mode: bypassPermissions
+  timeout_minutes: 5
+
+teams:
+  # --- Tier 0: Three parallel research teams (no dependencies) ---
+  - name: requirements
+    lead:
+      role: "Requirements Analyst"
+    tasks:
+      - summary: "Gather requirements for a simple CLI calculator app"
+        details: |
+          Write a short requirements document for a CLI calculator in Go.
+          Cover: supported operations (+, -, *, /), input format, error handling,
+          edge cases (division by zero). Keep it to ~20 lines.
+        deliverables:
+          - "requirements.md"
+    depends_on: []
+
+  - name: tech-research
+    lead:
+      role: "Tech Researcher"
+    tasks:
+      - summary: "Research Go CLI patterns for a calculator"
+        details: |
+          Describe the best Go patterns for building a simple CLI calculator.
+          Cover: flag parsing (cobra vs stdlib), input parsing, error handling style.
+          Keep it brief — just key recommendations in ~15 lines.
+        deliverables:
+          - "tech-research.md"
+    depends_on: []
+
+  - name: test-strategy
+    lead:
+      role: "QA Strategist"
+    tasks:
+      - summary: "Define test strategy for a CLI calculator"
+        details: |
+          Write a short test strategy for a Go CLI calculator.
+          Cover: unit tests for each operation, edge cases, table-driven test patterns.
+          Keep it to ~15 lines.
+        deliverables:
+          - "test-strategy.md"
+    depends_on: []
+
+  # --- Tier 1: Two teams that depend on Tier 0 ---
+  - name: architecture
+    lead:
+      role: "Software Architect"
+    tasks:
+      - summary: "Design the calculator architecture"
+        details: |
+          Based on the requirements and tech research from upstream teams,
+          design a simple architecture for the Go CLI calculator.
+          Define the package structure, key interfaces, and data flow.
+          Keep it to ~20 lines.
+        deliverables:
+          - "architecture.md"
+    depends_on:
+      - requirements
+      - tech-research
+
+  - name: test-plan
+    lead:
+      role: "QA Lead"
+    tasks:
+      - summary: "Write the detailed test plan"
+        details: |
+          Based on the requirements and test strategy from upstream teams,
+          write specific test cases for the Go CLI calculator.
+          List 8-10 test cases with input, expected output, and rationale.
+          Keep it to ~25 lines.
+        deliverables:
+          - "test-plan.md"
+    depends_on:
+      - requirements
+      - test-strategy
+
+  # --- Tier 2: Final integration team ---
+  - name: integration
+    lead:
+      role: "Integration Lead"
+    tasks:
+      - summary: "Produce the final implementation plan"
+        details: |
+          Synthesize the architecture design and test plan from upstream teams
+          into a final implementation plan. Include: file list, build steps,
+          implementation order, and a verification checklist.
+          Keep it to ~30 lines.
+        deliverables:
+          - "implementation-plan.md"
+    depends_on:
+      - architecture
+      - test-plan

@@ -37,3 +37,12 @@ cortex-*.tar
 .elixir_ls/
 .vscode/
 *.beam
+
+# Internal planning docs
+/architecture.md
+/implementation-plan.md
+/requirements.md
+/tech-research.md
+/test-plan.md
+/test-strategy.md
+/tokens-rest.txt
