@@ -4,9 +4,9 @@ Multi-agent orchestration system built on Elixir/OTP. Cortex manages teams of AI
 
 It supports two coordination modes: **DAG orchestration** for structured, dependency-aware execution, and **gossip protocol** for emergent, decentralized knowledge sharing.
 
-![DAG overview — run in progress](priv/static/images/dag-overview.png)
-![Live agent logs](priv/static/images/logs.png)
-![Gossip topology](priv/static/images/gossip-overview.png)
+![DAG overview — run in progress](priv/static/images/dag-overview.jpg)
+![Live agent logs](priv/static/images/logs.jpg)
+![Gossip topology](priv/static/images/gossip-overview.jpg)
 
 ## Why Elixir?
 
