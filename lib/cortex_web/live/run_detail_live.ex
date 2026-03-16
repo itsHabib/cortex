@@ -59,6 +59,7 @@ defmodule CortexWeb.RunDetailLive do
            selected_summary: nil,
            run_summary: nil,
            summary_jobs: [],
+           summaries_expanded: false,
            gossip_round: nil,
            pid_status: %{},
            editing_name: false,
@@ -109,6 +110,7 @@ defmodule CortexWeb.RunDetailLive do
            selected_summary: nil,
            run_summary: nil,
            summary_jobs: [],
+           summaries_expanded: false,
            gossip_round: nil,
            pid_status: %{},
            editing_name: false,
@@ -380,7 +382,7 @@ defmodule CortexWeb.RunDetailLive do
 
     entry = %{
       team: "system",
-      text: "AI summary complete",
+      text: "Agent summary complete",
       kind: :message,
       at: format_now()
     }
@@ -395,13 +397,13 @@ defmodule CortexWeb.RunDetailLive do
        selected_summary: %{name: summary.filename || "latest", content: summary.content},
        activities: prepend_activity(socket.assigns.activities, entry)
      )
-     |> put_flash(:info, "AI summary ready")}
+     |> put_flash(:info, "Agent summary ready")}
   end
 
   def handle_info({:ai_summary_result, job_id, {:error, reason}}, socket) do
     entry = %{
       team: "system",
-      text: "AI summary failed: #{inspect(reason)}",
+      text: "Agent summary failed: #{inspect(reason)}",
       kind: :error,
       at: format_now()
     }
@@ -414,7 +416,7 @@ defmodule CortexWeb.RunDetailLive do
        summary_jobs: jobs,
        activities: prepend_activity(socket.assigns.activities, entry)
      )
-     |> put_flash(:error, "AI summary failed: #{inspect(reason)}")}
+     |> put_flash(:error, "Agent summary failed: #{inspect(reason)}")}
   end
 
   def handle_info({:debug_report_result, {:ok, report}}, socket) do
@@ -622,7 +624,7 @@ defmodule CortexWeb.RunDetailLive do
     team_name = socket.assigns.diagnostics_team
 
     cond do
-      not (run && run.workspace_path && team_name) ->
+      !(run && run.workspace_path && team_name) ->
         {:noreply, put_flash(socket, :error, "No workspace or team selected")}
 
       socket.assigns.debug_loading ->
@@ -710,7 +712,7 @@ defmodule CortexWeb.RunDetailLive do
     workspace_path = run && run.workspace_path
 
     cond do
-      not (run && to != "" && content != "") ->
+      !(run && to != "" && content != "") ->
         {:noreply, socket}
 
       not workspace_path ->
@@ -799,7 +801,7 @@ defmodule CortexWeb.RunDetailLive do
     team_run = Enum.find(socket.assigns.team_runs, &(&1.team_name == team_name))
 
     cond do
-      not (run && workspace_path) ->
+      !(run && workspace_path) ->
         {:noreply, put_flash(socket, :error, "No workspace path — cannot restart")}
 
       team_pid_alive?(workspace_path, team_name) ->
@@ -811,7 +813,7 @@ defmodule CortexWeb.RunDetailLive do
              "Wait for it to finish or kill it manually before restarting."
          )}
 
-      not (team_run && team_run.prompt) ->
+      !(team_run && team_run.prompt) ->
         {:noreply, put_flash(socket, :error, "No prompt found for #{team_name}")}
 
       true ->
@@ -994,12 +996,16 @@ defmodule CortexWeb.RunDetailLive do
     {:noreply, assign(socket, coordinator_summaries: summaries)}
   end
 
+  def handle_event("toggle_summaries", _params, socket) do
+    {:noreply, assign(socket, summaries_expanded: !socket.assigns.summaries_expanded)}
+  end
+
   def handle_event("request_ai_summary", _params, socket) do
     run = socket.assigns.run
     workspace_path = run && run.workspace_path
 
     cond do
-      not (run && workspace_path) ->
+      !(run && workspace_path) ->
         {:noreply, put_flash(socket, :error, "No workspace path")}
 
       has_running_summary_job?(socket.assigns.summary_jobs) ->
@@ -1059,7 +1065,7 @@ defmodule CortexWeb.RunDetailLive do
 
         entry = %{
           team: "system",
-          text: "AI summary agent spawned (haiku)",
+          text: "Agent summary agent spawned (haiku)",
           kind: :message,
           at: format_now()
         }
@@ -1070,7 +1076,7 @@ defmodule CortexWeb.RunDetailLive do
            summary_jobs: [job | socket.assigns.summary_jobs],
            activities: prepend_activity(socket.assigns.activities, entry)
          )
-         |> put_flash(:info, "Generating AI summary...")}
+         |> put_flash(:info, "Generating Agent summary...")}
     end
   end
 
@@ -1790,7 +1796,7 @@ defmodule CortexWeb.RunDetailLive do
                   )
                 ]}
               >
-                {if loading, do: "Generating AI Summary...", else: "Generate AI Summary"}
+                {if loading, do: "Generating Agent Summary...", else: "Generate Agent Summary"}
               </button>
               <button
                 phx-click="generate_summary"
@@ -1806,7 +1812,7 @@ defmodule CortexWeb.RunDetailLive do
               </button>
             </div>
             <p class="text-xs text-gray-500 mt-2">
-              AI Summary spawns a haiku agent to analyze workspace files (state, logs, registry). DB Summary builds from Ecto state.
+              Agent Summary spawns a haiku agent to analyze workspace files (state, logs, registry). DB Summary builds from Ecto state.
             </p>
           </div>
 
@@ -1821,7 +1827,7 @@ defmodule CortexWeb.RunDetailLive do
                       <span class={["text-xs font-medium px-2 py-0.5 rounded", job_badge_class(job.status)]}>
                         {job_label(job.status)}
                       </span>
-                      <span class="text-gray-400">AI Summary</span>
+                      <span class="text-gray-400">Agent Summary</span>
                       <span :if={job.status == :running} class="text-gray-500 text-xs">{elapsed_since(job.started_at)}</span>
                     </div>
                     <div class="flex items-center gap-3 text-xs">
@@ -1834,28 +1840,38 @@ defmodule CortexWeb.RunDetailLive do
             </div>
           <% end %>
 
-          <!-- Saved summaries from .cortex/summaries/ -->
+          <!-- Agent Summaries from .cortex/summaries/ -->
           <%= if @coordinator_summaries != [] do %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Saved Summaries</h2>
-              <div class="flex flex-wrap gap-2 mb-3">
-                <button
-                  :for={file <- @coordinator_summaries}
-                  phx-click="select_summary"
-                  phx-value-file={file}
-                  class={[
-                    "text-xs px-3 py-1.5 rounded border transition-colors",
-                    if(@selected_summary && @selected_summary.name == file,
-                      do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
-                      else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
-                    )
-                  ]}
-                >
-                  {file}
-                </button>
-              </div>
-              <div :if={@selected_summary} class="bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">
-                <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_summary.content}</pre>
+              <button phx-click="toggle_summaries" class="flex items-center justify-between w-full group">
+                <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
+                  Agent Summaries
+                  <span class="text-xs text-gray-600 normal-case ml-2">({length(@coordinator_summaries)})</span>
+                </h2>
+                <svg class={["w-4 h-4 text-gray-500 transition-transform", if(@summaries_expanded, do: "rotate-180", else: "")]} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              <div :if={@summaries_expanded} class="mt-3">
+                <div class="flex flex-wrap gap-2 mb-3">
+                  <button
+                    :for={file <- @coordinator_summaries}
+                    phx-click="select_summary"
+                    phx-value-file={file}
+                    class={[
+                      "text-xs px-3 py-1.5 rounded border transition-colors",
+                      if(@selected_summary && @selected_summary.name == file,
+                        do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
+                        else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
+                      )
+                    ]}
+                  >
+                    {file}
+                  </button>
+                </div>
+                <div :if={@selected_summary} class="bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">
+                  <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_summary.content}</pre>
+                </div>
               </div>
             </div>
           <% end %>
@@ -1871,7 +1887,7 @@ defmodule CortexWeb.RunDetailLive do
           <%= if @coordinator_summaries == [] and !@run_summary and @summary_jobs == [] do %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
               <p class="text-gray-400 mb-3">No summaries yet.</p>
-              <p class="text-gray-500 text-sm">Click "Generate AI Summary" to spawn a haiku agent that analyzes your workspace files, or "Generate DB Summary" for a quick snapshot from database state.</p>
+              <p class="text-gray-500 text-sm">Click "Generate Agent Summary" to spawn a haiku agent that analyzes your workspace files, or "Generate DB Summary" for a quick snapshot from database state.</p>
             </div>
           <% end %>
         </div>
@@ -2519,7 +2535,10 @@ defmodule CortexWeb.RunDetailLive do
 
     {:noreply,
      socket
-     |> assign(activities: prepend_activity(socket.assigns.activities, entry))
+     |> assign(
+       coordinator_alive: true,
+       activities: prepend_activity(socket.assigns.activities, entry)
+     )
      |> put_flash(:info, "Coordinator agent started")}
   end
 
