@@ -97,7 +97,8 @@ defmodule Cortex.Gossip.Config.Loader do
     %GossipSettings{
       rounds: Map.get(raw, "rounds", 5),
       topology: parse_topology(Map.get(raw, "topology", "random")),
-      exchange_interval_seconds: Map.get(raw, "exchange_interval_seconds", 60)
+      exchange_interval_seconds: Map.get(raw, "exchange_interval_seconds", 60),
+      coordinator: Map.get(raw, "coordinator", false) == true
     }
   end
 

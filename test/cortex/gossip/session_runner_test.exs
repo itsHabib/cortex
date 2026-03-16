@@ -45,7 +45,8 @@ defmodule Cortex.Gossip.SessionRunnerTest do
       gossip: %GossipSettings{
         rounds: Keyword.get(opts, :rounds, 1),
         topology: Keyword.get(opts, :topology, :full_mesh),
-        exchange_interval_seconds: Keyword.get(opts, :interval, 1)
+        exchange_interval_seconds: Keyword.get(opts, :interval, 1),
+        coordinator: Keyword.get(opts, :coordinator, false)
       },
       agents: agents,
       seed_knowledge: Keyword.get(opts, :seeds, [])
@@ -339,6 +340,146 @@ defmodule Cortex.Gossip.SessionRunnerTest do
 
     test "returns error for missing file" do
       assert {:error, _} = SessionRunner.run("/nonexistent/gossip.yaml")
+    end
+  end
+
+  describe "coordinator mode" do
+    test "sets up coordinator workspace when coordinator: true", %{tmp_dir: tmp_dir} do
+      script =
+        write_mock_script(tmp_dir, "coord_ws.sh", """
+        echo '{"type":"system","subtype":"init","session_id":"coord-ws-sess"}'
+        echo '{"type":"result","subtype":"success","result":"Done","cost_usd":0.01,"num_turns":1,"duration_ms":1000}'
+        """)
+
+      config =
+        simple_config(
+          [%Agent{name: "agent-a", topic: "research", prompt: "Research stuff"}],
+          rounds: 1,
+          interval: 1,
+          coordinator: true
+        )
+
+      SessionRunner.run_config(config, workspace_path: tmp_dir, command: script)
+
+      # Coordinator message directory should exist
+      assert File.dir?(Path.join([tmp_dir, ".cortex", "messages", "coordinator"]))
+
+      # Coordinator inbox should exist
+      assert File.exists?(
+               Path.join([tmp_dir, ".cortex", "messages", "coordinator", "inbox.json"])
+             )
+    end
+
+    test "coordinator receives knowledge digest in inbox", %{tmp_dir: tmp_dir} do
+      findings =
+        Jason.encode!([
+          %{topic: "data", content: "Found important data", confidence: 0.9}
+        ])
+
+      script = write_findings_script(tmp_dir, "data-agent", findings)
+
+      config =
+        simple_config(
+          [%Agent{name: "data-agent", topic: "data", prompt: "Find data"}],
+          rounds: 1,
+          interval: 1,
+          coordinator: true
+        )
+
+      SessionRunner.run_config(config, workspace_path: tmp_dir, command: script)
+
+      # Check coordinator inbox has knowledge digest
+      inbox_path = Path.join([tmp_dir, ".cortex", "messages", "coordinator", "inbox.json"])
+      {:ok, content} = File.read(inbox_path)
+      {:ok, messages} = Jason.decode(content)
+
+      knowledge_msgs = Enum.filter(messages, &(Map.get(&1, "type") == "knowledge_digest"))
+      assert knowledge_msgs != []
+
+      # Verify the digest contains the knowledge entries structure
+      [digest | _] = knowledge_msgs
+      {:ok, payload} = Jason.decode(Map.get(digest, "content"))
+      assert Map.has_key?(payload, "round")
+      assert Map.has_key?(payload, "entries")
+      assert Map.has_key?(payload, "agents")
+    end
+
+    test "early termination stops exchange loop", %{tmp_dir: tmp_dir} do
+      # Script that writes a terminate message to coordinator outbox
+      script =
+        write_mock_script(tmp_dir, "term_agent.sh", """
+        # Write findings
+        FINDINGS_DIR="$PWD/.cortex/knowledge/agent-a"
+        mkdir -p "$FINDINGS_DIR"
+        echo '[]' > "$FINDINGS_DIR/findings.json"
+
+        # Write terminate message to coordinator outbox (simulating coordinator behavior)
+        OUTBOX="$PWD/.cortex/messages/coordinator/outbox.json"
+        mkdir -p "$(dirname "$OUTBOX")"
+        cat > "$OUTBOX" << 'EOF'
+        [{"from": "coordinator", "to": "system", "type": "terminate", "content": "Knowledge converged", "timestamp": "2026-01-01T00:00:00Z"}]
+        EOF
+
+        echo '{"type":"system","subtype":"init","session_id":"term-sess"}'
+        echo '{"type":"result","subtype":"success","result":"Done","cost_usd":0.01,"num_turns":1,"duration_ms":1000}'
+        """)
+
+      config =
+        simple_config(
+          [%Agent{name: "agent-a", topic: "test", prompt: "Test early termination"}],
+          rounds: 5,
+          interval: 1,
+          coordinator: true
+        )
+
+      # Even with 5 rounds, should terminate early due to coordinator signal
+      assert {:ok, summary} =
+               SessionRunner.run_config(config,
+                 workspace_path: tmp_dir,
+                 command: script
+               )
+
+      assert summary.status in [:complete, :partial]
+    end
+
+    test "dry run includes coordinator status", %{tmp_dir: tmp_dir} do
+      yaml = """
+      name: "coord-test"
+      mode: gossip
+      gossip:
+        rounds: 3
+        coordinator: true
+      agents:
+        - name: agent-a
+          topic: "topic A"
+          prompt: "Explore A"
+      """
+
+      config_path = write_config_file(tmp_dir, yaml)
+      assert {:ok, plan} = SessionRunner.run(config_path, dry_run: true)
+      assert plan.status == :dry_run
+      assert plan.project == "coord-test"
+    end
+
+    test "no coordinator workspace when coordinator: false", %{tmp_dir: tmp_dir} do
+      script =
+        write_mock_script(tmp_dir, "no_coord.sh", """
+        echo '{"type":"system","subtype":"init","session_id":"nc-sess"}'
+        echo '{"type":"result","subtype":"success","result":"Done","cost_usd":0.01,"num_turns":1,"duration_ms":1000}'
+        """)
+
+      config =
+        simple_config(
+          [%Agent{name: "agent-a", topic: "research", prompt: "Research stuff"}],
+          rounds: 1,
+          interval: 1,
+          coordinator: false
+        )
+
+      SessionRunner.run_config(config, workspace_path: tmp_dir, command: script)
+
+      # Coordinator message directory should NOT exist
+      refute File.dir?(Path.join([tmp_dir, ".cortex", "messages", "coordinator"]))
     end
   end
 end

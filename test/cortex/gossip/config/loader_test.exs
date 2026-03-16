@@ -100,6 +100,39 @@ defmodule Cortex.Gossip.Config.LoaderTest do
       end
     end
 
+    test "parses coordinator: true" do
+      yaml = """
+      name: test
+      mode: gossip
+      gossip:
+        rounds: 3
+        coordinator: true
+      agents:
+        - name: a
+          topic: t
+          prompt: p
+      """
+
+      {:ok, config} = Loader.load_string(yaml)
+      assert config.gossip.coordinator == true
+    end
+
+    test "coordinator defaults to false" do
+      yaml = """
+      name: test
+      mode: gossip
+      gossip:
+        rounds: 3
+      agents:
+        - name: a
+          topic: t
+          prompt: p
+      """
+
+      {:ok, config} = Loader.load_string(yaml)
+      assert config.gossip.coordinator == false
+    end
+
     test "uses defaults when gossip section is missing" do
       yaml = """
       name: test
@@ -114,6 +147,7 @@ defmodule Cortex.Gossip.Config.LoaderTest do
       assert config.gossip.rounds == 5
       assert config.gossip.topology == :random
       assert config.gossip.exchange_interval_seconds == 60
+      assert config.gossip.coordinator == false
     end
 
     test "uses defaults when defaults section is missing" do

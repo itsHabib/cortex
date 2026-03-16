@@ -7,17 +7,20 @@ defmodule Cortex.Gossip.Config.GossipSettings do
     - `rounds` — number of gossip exchange rounds (default: 5)
     - `topology` — topology strategy: `:full_mesh`, `:ring`, or `:random` (default: `:random`)
     - `exchange_interval_seconds` — seconds between exchange rounds (default: 60)
+    - `coordinator` — whether to spawn a coordinator agent that synthesizes, steers, and can terminate early (default: false)
 
   """
 
   defstruct rounds: 5,
             topology: :random,
-            exchange_interval_seconds: 60
+            exchange_interval_seconds: 60,
+            coordinator: false
 
   @type t :: %__MODULE__{
           rounds: pos_integer(),
           topology: :full_mesh | :ring | :random,
-          exchange_interval_seconds: pos_integer()
+          exchange_interval_seconds: pos_integer(),
+          coordinator: boolean()
         }
 end
 

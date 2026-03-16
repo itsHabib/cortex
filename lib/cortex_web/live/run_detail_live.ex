@@ -685,7 +685,8 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   def handle_event("start_rename", _params, socket) do
-    {:noreply, assign(socket, editing_name: true, name_form: %{"name" => socket.assigns.run.name || ""})}
+    {:noreply,
+     assign(socket, editing_name: true, name_form: %{"name" => socket.assigns.run.name || ""})}
   end
 
   def handle_event("cancel_rename", _params, socket) do
@@ -758,15 +759,15 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("start_coordinator", _params, socket) do
     run = socket.assigns.run
 
-    if run && run.workspace_path && run.config_yaml do
-      with {:ok, config, _warnings} <- ConfigLoader.load_string(run.config_yaml),
-           {:ok, tiers} <- DAG.build_tiers(config.teams) do
-        do_start_coordinator(socket, run, config, tiers)
-      else
-        _ -> {:noreply, put_flash(socket, :error, "Failed to parse config or build DAG")}
-      end
-    else
-      {:noreply, put_flash(socket, :error, "No workspace path or config available")}
+    cond do
+      !(run && run.workspace_path && run.config_yaml) ->
+        {:noreply, put_flash(socket, :error, "No workspace path or config available")}
+
+      is_gossip?(run) ->
+        start_gossip_coordinator(socket, run)
+
+      true ->
+        start_dag_coordinator(socket, run)
     end
   end
 
@@ -2108,7 +2109,64 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  # Extracted from handle_event("start_coordinator") to reduce cyclomatic complexity
+  defp start_gossip_coordinator(socket, run) do
+    alias Cortex.Gossip.Config.Loader, as: GossipLoader
+    alias Cortex.Gossip.CoordinatorPrompt
+
+    case GossipLoader.load_string(run.config_yaml) do
+      {:ok, gossip_config} ->
+        workspace_path = run.workspace_path
+        cortex_path = Path.join(workspace_path, ".cortex")
+        run_id = run.id
+
+        InboxBridge.setup(workspace_path, ["coordinator"])
+
+        prompt = CoordinatorPrompt.build(gossip_config, workspace_path)
+        log_path = Path.join([cortex_path, "logs", "coordinator.log"])
+
+        callbacks = build_coordinator_callbacks(run_id, cortex_path)
+
+        safe_store_call(fn ->
+          Cortex.Store.create_team_run(%{
+            run_id: run_id,
+            team_name: "coordinator",
+            role: "Gossip Coordinator",
+            tier: -1,
+            status: "running",
+            prompt: prompt,
+            log_path: log_path,
+            started_at: DateTime.utc_now()
+          })
+        end)
+
+        spawn_coordinator_task(run_id, prompt, log_path, workspace_path, callbacks)
+
+        entry = %{
+          team: "system",
+          text: "Starting gossip coordinator agent...",
+          kind: :resume,
+          at: format_now()
+        }
+
+        {:noreply,
+         socket
+         |> assign(activities: prepend_activity(socket.assigns.activities, entry))
+         |> put_flash(:info, "Gossip coordinator agent started")}
+
+      {:error, _errors} ->
+        {:noreply, put_flash(socket, :error, "Failed to parse gossip config")}
+    end
+  end
+
+  defp start_dag_coordinator(socket, run) do
+    with {:ok, config, _warnings} <- ConfigLoader.load_string(run.config_yaml),
+         {:ok, tiers} <- DAG.build_tiers(config.teams) do
+      do_start_coordinator(socket, run, config, tiers)
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Failed to parse config or build DAG")}
+    end
+  end
+
   defp do_start_coordinator(socket, run, config, tiers) do
     workspace_path = run.workspace_path
     cortex_path = Path.join(workspace_path, ".cortex")

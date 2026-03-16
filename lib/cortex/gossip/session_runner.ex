@@ -29,6 +29,7 @@ defmodule Cortex.Gossip.SessionRunner do
 
   alias Cortex.Gossip.Config, as: GossipConfig
   alias Cortex.Gossip.Config.Loader
+  alias Cortex.Gossip.CoordinatorPrompt
   alias Cortex.Gossip.Entry
   alias Cortex.Gossip.KnowledgeStore
   alias Cortex.Gossip.Protocol
@@ -118,9 +119,11 @@ defmodule Cortex.Gossip.SessionRunner do
     run_id = Keyword.get(opts, :run_id)
 
     agent_names = Enum.map(config.agents, & &1.name)
+    coordinator? = config.gossip.coordinator
 
-    # Step 1: Set up workspace directories
-    setup_workspace(workspace_path, agent_names)
+    # Step 1: Set up workspace directories (include coordinator if enabled)
+    all_participants = if coordinator?, do: agent_names ++ ["coordinator"], else: agent_names
+    setup_workspace(workspace_path, all_participants)
 
     # Step 2: Start KnowledgeStores
     stores = start_stores(agent_names)
@@ -143,12 +146,21 @@ defmodule Cortex.Gossip.SessionRunner do
       # Step 5: Spawn all agents simultaneously
       agent_tasks = spawn_all_agents(config, workspace_path, command, run_id)
 
+      # Step 5b: Spawn coordinator if enabled
+      coordinator_task =
+        if coordinator? do
+          spawn_coordinator(config, workspace_path, command, run_id)
+        end
+
       # Step 6: Run exchange rounds (agents are running concurrently)
-      run_exchange_loop(config, stores, workspace_path)
+      run_exchange_loop(config, stores, workspace_path, coordinator?)
 
       # Step 7: Await all agent results
       timeout_ms = config.defaults.timeout_minutes * 60_000
       results = await_agents(agent_tasks, timeout_ms)
+
+      # Stop coordinator (it runs for the session duration)
+      if coordinator_task, do: stop_coordinator_task(coordinator_task)
 
       run_duration = System.monotonic_time(:millisecond) - run_start
 
@@ -503,34 +515,104 @@ defmodule Cortex.Gossip.SessionRunner do
 
   # -- Exchange Loop -----------------------------------------------------------
 
-  @spec run_exchange_loop(GossipConfig.t(), %{String.t() => pid()}, String.t()) :: :ok
-  defp run_exchange_loop(config, stores, workspace_path) do
+  @spec run_exchange_loop(GossipConfig.t(), %{String.t() => pid()}, String.t(), boolean()) :: :ok
+  defp run_exchange_loop(config, stores, workspace_path, coordinator?) do
     agent_names = Enum.map(config.agents, & &1.name)
     topology = Topology.build(agent_names, config.gossip.topology)
     interval_ms = config.gossip.exchange_interval_seconds * 1_000
 
-    Enum.each(1..config.gossip.rounds, fn round ->
-      # Wait for agents to accumulate findings
-      Process.sleep(interval_ms)
+    run_exchange_rounds(
+      config,
+      stores,
+      workspace_path,
+      coordinator?,
+      agent_names,
+      topology,
+      interval_ms,
+      1
+    )
+  end
 
-      Cortex.Logger.info(
-        "Gossip round #{round}/#{config.gossip.rounds} — reading findings and exchanging",
-        project: config.name,
-        round: round,
-        total_rounds: config.gossip.rounds
+  defp run_exchange_rounds(
+         config,
+         _stores,
+         _workspace_path,
+         _coordinator?,
+         _agent_names,
+         _topology,
+         _interval_ms,
+         round
+       )
+       when round > config.gossip.rounds do
+    :ok
+  end
+
+  defp run_exchange_rounds(
+         config,
+         stores,
+         workspace_path,
+         coordinator?,
+         agent_names,
+         topology,
+         interval_ms,
+         round
+       ) do
+    # Wait for agents to accumulate findings
+    Process.sleep(interval_ms)
+
+    Cortex.Logger.info(
+      "Gossip round #{round}/#{config.gossip.rounds} — reading findings and exchanging",
+      project: config.name,
+      round: round,
+      total_rounds: config.gossip.rounds
+    )
+
+    # Read findings from all agents into their KnowledgeStores
+    ingest_all_findings(stores, workspace_path, config.agents)
+
+    # Run gossip exchange between stores
+    do_exchange(stores, topology)
+
+    # Deliver new knowledge to agent inboxes
+    deliver_knowledge_to_inboxes(stores, workspace_path, agent_names)
+
+    # If coordinator is active, feed it the merged knowledge and process its output
+    if coordinator? do
+      deliver_knowledge_to_coordinator(
+        stores,
+        workspace_path,
+        agent_names,
+        round,
+        config.gossip.rounds
       )
 
-      # Read findings from all agents into their KnowledgeStores
-      ingest_all_findings(stores, workspace_path, config.agents)
+      process_coordinator_outbox(workspace_path, agent_names)
+    end
 
-      # Run gossip exchange between stores
-      do_exchange(stores, topology)
+    broadcast(:gossip_round_completed, %{round: round, total: config.gossip.rounds})
 
-      # Deliver new knowledge to agent inboxes
-      deliver_knowledge_to_inboxes(stores, workspace_path, agent_names)
+    # Check for early termination from coordinator
+    if coordinator? && coordinator_requested_termination?(workspace_path) do
+      Cortex.Logger.info(
+        "Coordinator requested early termination after round #{round}",
+        project: config.name,
+        round: round
+      )
 
-      broadcast(:gossip_round_completed, %{round: round, total: config.gossip.rounds})
-    end)
+      broadcast(:gossip_early_termination, %{round: round, total: config.gossip.rounds})
+      :ok
+    else
+      run_exchange_rounds(
+        config,
+        stores,
+        workspace_path,
+        coordinator?,
+        agent_names,
+        topology,
+        interval_ms,
+        round + 1
+      )
+    end
   end
 
   @spec ingest_all_findings(
@@ -653,6 +735,164 @@ defmodule Cortex.Gossip.SessionRunner do
 
         InboxBridge.deliver(workspace_path, agent_name, message)
       end
+    end)
+  end
+
+  # -- Coordinator Spawning & Communication -------------------------------------
+
+  @spec spawn_coordinator(GossipConfig.t(), String.t(), String.t(), String.t() | nil) :: Task.t()
+  defp spawn_coordinator(config, workspace_path, command, run_id) do
+    prompt = CoordinatorPrompt.build(config, workspace_path)
+    log_dir = Path.join([workspace_path, ".cortex", "logs"])
+    File.mkdir_p!(log_dir)
+    log_path = Path.join(log_dir, "coordinator.log")
+
+    create_coordinator_team_run(run_id, prompt, log_path)
+
+    on_token_update = fn name, tokens ->
+      broadcast(:team_tokens_updated, %{
+        run_id: run_id,
+        team_name: name,
+        input_tokens: tokens.input_tokens,
+        output_tokens: tokens.output_tokens,
+        cache_read_tokens: tokens.cache_read_tokens,
+        cache_creation_tokens: tokens.cache_creation_tokens
+      })
+    end
+
+    on_activity = fn name, activity ->
+      broadcast(:team_activity, %{
+        run_id: run_id,
+        team_name: name,
+        type: Map.get(activity, :type, :unknown),
+        tools: Map.get(activity, :tools, []),
+        details: Map.get(activity, :details, []),
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+    end
+
+    Task.async(fn ->
+      Spawner.spawn(
+        team_name: "coordinator",
+        prompt: prompt,
+        model: "haiku",
+        max_turns: 500,
+        permission_mode: "bypassPermissions",
+        timeout_minutes: config.defaults.timeout_minutes,
+        log_path: log_path,
+        command: command,
+        on_token_update: on_token_update,
+        on_activity: on_activity
+      )
+    end)
+  end
+
+  @spec create_coordinator_team_run(String.t() | nil, String.t(), String.t()) :: :ok
+  defp create_coordinator_team_run(nil, _prompt, _log_path), do: :ok
+
+  defp create_coordinator_team_run(run_id, prompt, log_path) do
+    Cortex.Store.create_team_run(%{
+      run_id: run_id,
+      team_name: "coordinator",
+      role: "Gossip Coordinator",
+      tier: -1,
+      status: "running",
+      prompt: prompt,
+      log_path: log_path,
+      started_at: DateTime.utc_now()
+    })
+  rescue
+    _ -> :ok
+  end
+
+  @spec stop_coordinator_task(Task.t()) :: :ok
+  defp stop_coordinator_task(task) do
+    case Task.yield(task, 5_000) do
+      {:ok, _result} -> :ok
+      nil -> Task.shutdown(task, :brutal_kill)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @spec deliver_knowledge_to_coordinator(
+          %{String.t() => pid()},
+          String.t(),
+          [String.t()],
+          pos_integer(),
+          pos_integer()
+        ) :: :ok
+  defp deliver_knowledge_to_coordinator(stores, workspace_path, agent_names, round, total_rounds) do
+    # Gather ALL knowledge entries from all stores
+    all_entries =
+      stores
+      |> Enum.flat_map(fn {_name, pid} -> KnowledgeStore.all(pid) end)
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.map(fn entry ->
+        %{
+          "source" => entry.source,
+          "topic" => entry.topic,
+          "content" => entry.content,
+          "confidence" => entry.confidence
+        }
+      end)
+
+    message = %{
+      from: "system",
+      to: "coordinator",
+      type: "knowledge_digest",
+      content:
+        Jason.encode!(
+          %{
+            "round" => round,
+            "total_rounds" => total_rounds,
+            "agents" => agent_names,
+            "total_entries" => length(all_entries),
+            "entries" => all_entries
+          },
+          pretty: true
+        ),
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    InboxBridge.deliver(workspace_path, "coordinator", message)
+  end
+
+  @spec process_coordinator_outbox(String.t(), [String.t()]) :: :ok
+  defp process_coordinator_outbox(workspace_path, agent_names) do
+    {:ok, messages} = InboxBridge.read_outbox(workspace_path, "coordinator")
+
+    # Relay steering messages to target agents
+    messages
+    |> Enum.filter(fn msg ->
+      to = Map.get(msg, "to", "")
+      to != "system" && to != "" && to in agent_names
+    end)
+    |> Enum.each(fn msg ->
+      to = Map.get(msg, "to")
+
+      steering = %{
+        from: "coordinator",
+        to: to,
+        type: "steering",
+        content: Map.get(msg, "content", ""),
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      InboxBridge.deliver(workspace_path, to, steering)
+    end)
+
+    :ok
+  end
+
+  @spec coordinator_requested_termination?(String.t()) :: boolean()
+  defp coordinator_requested_termination?(workspace_path) do
+    {:ok, messages} = InboxBridge.read_outbox(workspace_path, "coordinator")
+
+    Enum.any?(messages, fn msg ->
+      Map.get(msg, "type") == "terminate" && Map.get(msg, "to") == "system"
     end)
   end
 
