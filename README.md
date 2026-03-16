@@ -46,14 +46,14 @@ Running dozens of long-lived AI agent processes, routing messages between them, 
 
 ### Prerequisites
 
-- Elixir 1.19+
-- Erlang/OTP 28+
+- Elixir 1.17+
+- Erlang/OTP 27+
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) (`claude -p` must be available)
 
 ### Setup
 
 ```bash
-git clone <repo-url> && cd cortex
+git clone https://github.com/itsHabib/cortex.git && cd cortex
 mix deps.get
 mix ecto.create && mix ecto.migrate
 mix test
@@ -75,12 +75,17 @@ mix run -e 'Cortex.Orchestration.Runner.run("orchestra.yaml", dry_run: true) |> 
 # Full run
 mix run -e 'Cortex.Orchestration.Runner.run("orchestra.yaml") |> IO.inspect()'
 
+# Gossip run
+mix run -e 'Cortex.Gossip.SessionRunner.run("gossip.yaml") |> IO.inspect()'
+
 # Resume stalled teams in an existing workspace
 mix cortex.resume /path/to/workspace
 
 # Auto-retry on rate limits
 mix cortex.resume /path/to/workspace --auto-retry --retry-delay 120
 ```
+
+You can also launch runs directly from the dashboard at `http://localhost:4000`.
 
 ### Full stack (with Grafana)
 
@@ -90,54 +95,130 @@ make up    # Phoenix:4000 + Prometheus:9090 + Grafana:3000 (admin/cortex)
 
 ## Configuration
 
-Projects are defined in YAML:
+### DAG Workflow (`examples/dag-demo.yaml`)
+
+Teams execute in dependency order — tier 0 runs in parallel, tier 1 waits for its dependencies, etc.
 
 ```yaml
-name: "my-project"
-workspace_path: /tmp/my-project
+name: "dag-demo"
 
 defaults:
-  model: sonnet
-  max_turns: 200
-  permission_mode: acceptEdits
-  timeout_minutes: 30
+  model: haiku
+  max_turns: 50
+  permission_mode: bypassPermissions
+  timeout_minutes: 10
 
 teams:
-  - name: backend
+  # Tier 0 — three parallel research teams
+  - name: requirements
     lead:
-      role: "Backend Engineer"
-      model: opus                # per-team model override
-    members:
-      - role: "Database Expert"
-        focus: "Schema design and migrations"
+      role: "Requirements Analyst"
     tasks:
-      - summary: "Build the REST API"
-        details: "Implement CRUD endpoints for all resources"
-        deliverables:
-          - "lib/api/router.ex"
-        verify: "mix test test/api/"
-    context: |
-      Use Phoenix framework with Ecto for persistence.
+      - summary: "Gather requirements for a CLI calculator app"
+        details: "Supported ops, input format, error handling, edge cases."
+        deliverables: ["requirements.md"]
 
-  - name: frontend
+  - name: tech-research
     lead:
-      role: "Frontend Engineer"
+      role: "Tech Researcher"
     tasks:
-      - summary: "Build the web UI"
-    depends_on:
-      - backend               # waits for backend to complete
+      - summary: "Research Go CLI patterns for a calculator"
+        deliverables: ["tech-research.md"]
+
+  - name: test-strategy
+    lead:
+      role: "QA Strategist"
+    tasks:
+      - summary: "Define test strategy"
+        deliverables: ["test-strategy.md"]
+
+  # Tier 1 — depends on tier 0
+  - name: architecture
+    lead:
+      role: "Software Architect"
+    tasks:
+      - summary: "Design the calculator architecture"
+        deliverables: ["architecture.md"]
+    depends_on: [requirements, tech-research]
+
+  - name: test-plan
+    lead:
+      role: "QA Lead"
+    tasks:
+      - summary: "Write detailed test cases"
+        deliverables: ["test-plan.md"]
+    depends_on: [requirements, test-strategy]
+
+  # Tier 2 — final synthesis
+  - name: integration
+    lead:
+      role: "Integration Lead"
+    tasks:
+      - summary: "Produce the final implementation plan"
+        deliverables: ["implementation-plan.md"]
+    depends_on: [architecture, test-plan]
+```
+
+### Gossip Session (`examples/gossip-simple.yaml`)
+
+Agents explore independently while a background coordinator periodically exchanges knowledge between them.
+
+```yaml
+name: "gossip-simple"
+mode: gossip
+
+cluster_context: |
+  You're part of a small team brainstorming names for a new coffee shop
+  that roasts its own beans and has a cozy library vibe. Share your best
+  ideas — build on what others suggest.
+
+defaults:
+  model: haiku
+  max_turns: 50
+  permission_mode: bypassPermissions
+  timeout_minutes: 5
+
+gossip:
+  rounds: 3                        # knowledge exchange rounds
+  topology: full_mesh              # full_mesh | ring | random
+  exchange_interval_seconds: 30    # seconds between rounds
+
+agents:
+  - name: branding
+    topic: "shop names"
+    prompt: |
+      Brainstorm 5 creative names for a coffee shop that roasts its own beans
+      and has a cozy library atmosphere. Build on any peer ideas you receive.
+
+  - name: vibes
+    topic: "shop names"
+    prompt: |
+      Brainstorm 5 creative names for a coffee-and-books shop. Focus on names
+      that evoke warmth, curiosity, and the smell of fresh roast.
+
+seed_knowledge:
+  - topic: "context"
+    content: "College town. Target: students, professors, remote workers."
 ```
 
 ### Config Reference
 
+**Shared fields:**
+
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `name` | Yes | — | Project name |
+| `mode` | No | `"workflow"` | `workflow` (DAG) or `gossip` |
 | `workspace_path` | No | `"."` | Directory for `.cortex/` workspace |
 | `defaults.model` | No | `"sonnet"` | Default LLM model |
 | `defaults.max_turns` | No | `200` | Max conversation turns |
 | `defaults.permission_mode` | No | `"acceptEdits"` | Permission mode for file edits |
-| `defaults.timeout_minutes` | No | `30` | Per-team timeout |
+| `defaults.timeout_minutes` | No | `30` | Per-team/agent timeout |
+
+**DAG workflow fields:**
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
 | `teams[].name` | Yes | — | Unique team identifier |
 | `teams[].lead.role` | Yes | — | Team lead role description |
 | `teams[].lead.model` | No | project default | Model override |
@@ -145,6 +226,20 @@ teams:
 | `teams[].tasks` | Yes | — | At least one task |
 | `teams[].depends_on` | No | `[]` | Team dependencies (by name) |
 | `teams[].context` | No | — | Additional prompt context |
+
+**Gossip fields:**
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `gossip.rounds` | No | `5` | Number of knowledge exchange rounds |
+| `gossip.topology` | No | `"random"` | `full_mesh`, `ring`, or `random` |
+| `gossip.exchange_interval_seconds` | No | `60` | Seconds between exchange rounds |
+| `gossip.coordinator` | No | `false` | Spawn a coordinator agent |
+| `cluster_context` | No | — | Shared context for all agents |
+| `agents[].name` | Yes | — | Unique agent identifier |
+| `agents[].topic` | Yes | — | Knowledge topic this agent explores |
+| `agents[].prompt` | Yes | — | Agent instructions |
+| `seed_knowledge` | No | `[]` | Initial knowledge entries |
 
 ## Architecture
 
@@ -225,7 +320,7 @@ Each run creates a `.cortex/` directory:
 ## Development
 
 ```bash
-mix test                              # run all tests
+mix test                              # 692 tests
 mix test --trace                      # verbose output
 mix test test/cortex/orchestration/   # specific directory
 mix format                            # format code
