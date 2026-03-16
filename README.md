@@ -121,7 +121,7 @@ agents:
     prompt: "Research the top 5 competitors..."
 ```
 
-See `examples/` for complete configs (`dag-demo.yaml`, `gossip-simple.yaml`, `gossip.yaml`).
+See `examples/` for complete configs (`dag-demo.yaml`, `gossip-simple.yaml`).
 
 ### Config Reference
 
