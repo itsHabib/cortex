@@ -18,6 +18,12 @@ defmodule Cortex.Telemetry do
   | `[:cortex, :team, :completed]` | `%{duration_ms: n, cost_usd: f}` | `team_name`, `status` |
   | `[:cortex, :gossip, :exchange]` | `%{duration_us: n}` | `store_a`, `store_b` |
   | `[:cortex, :tool, :executed]` | `%{duration_ms: n}` | `tool_name`, `success` |
+  | `[:cortex, :mesh, :started]` | `%{agent_count: n}` | `project`, `agents` |
+  | `[:cortex, :mesh, :completed]` | `%{duration_ms: n}` | `project`, `status` |
+  | `[:cortex, :mesh, :member_joined]` | `%{}` | `name`, `role` |
+  | `[:cortex, :mesh, :member_suspect]` | `%{}` | `name` |
+  | `[:cortex, :mesh, :member_dead]` | `%{}` | `name` |
+  | `[:cortex, :mesh, :heartbeat]` | `%{}` | `cluster` |
 
   ## Usage
 
@@ -37,6 +43,12 @@ defmodule Cortex.Telemetry do
   @team_tokens_updated [:cortex, :team, :tokens_updated]
   @gossip_exchange [:cortex, :gossip, :exchange]
   @tool_executed [:cortex, :tool, :executed]
+  @mesh_started [:cortex, :mesh, :started]
+  @mesh_completed [:cortex, :mesh, :completed]
+  @mesh_member_joined [:cortex, :mesh, :member_joined]
+  @mesh_member_suspect [:cortex, :mesh, :member_suspect]
+  @mesh_member_dead [:cortex, :mesh, :member_dead]
+  @mesh_heartbeat [:cortex, :mesh, :heartbeat]
 
   @doc "Returns the list of all Cortex telemetry event names."
   @spec event_names() :: [list(atom())]
@@ -50,7 +62,13 @@ defmodule Cortex.Telemetry do
       @team_completed,
       @team_tokens_updated,
       @gossip_exchange,
-      @tool_executed
+      @tool_executed,
+      @mesh_started,
+      @mesh_completed,
+      @mesh_member_joined,
+      @mesh_member_suspect,
+      @mesh_member_dead,
+      @mesh_heartbeat
     ]
   end
 
@@ -123,5 +141,43 @@ defmodule Cortex.Telemetry do
   def emit_tool_executed(metadata) when is_map(metadata) do
     measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
     :telemetry.execute(@tool_executed, measurements, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :mesh, :started]` event."
+  @spec emit_mesh_started(map()) :: :ok
+  def emit_mesh_started(metadata) when is_map(metadata) do
+    agent_count = metadata |> Map.get(:agents, []) |> length()
+    :telemetry.execute(@mesh_started, %{agent_count: agent_count}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :mesh, :completed]` event."
+  @spec emit_mesh_completed(map()) :: :ok
+  def emit_mesh_completed(metadata) when is_map(metadata) do
+    measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
+    :telemetry.execute(@mesh_completed, measurements, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :mesh, :member_joined]` event."
+  @spec emit_mesh_member_joined(map()) :: :ok
+  def emit_mesh_member_joined(metadata) when is_map(metadata) do
+    :telemetry.execute(@mesh_member_joined, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :mesh, :member_suspect]` event."
+  @spec emit_mesh_member_suspect(map()) :: :ok
+  def emit_mesh_member_suspect(metadata) when is_map(metadata) do
+    :telemetry.execute(@mesh_member_suspect, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :mesh, :member_dead]` event."
+  @spec emit_mesh_member_dead(map()) :: :ok
+  def emit_mesh_member_dead(metadata) when is_map(metadata) do
+    :telemetry.execute(@mesh_member_dead, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :mesh, :heartbeat]` event."
+  @spec emit_mesh_heartbeat(map()) :: :ok
+  def emit_mesh_heartbeat(metadata) when is_map(metadata) do
+    :telemetry.execute(@mesh_heartbeat, %{system_time: System.system_time()}, metadata)
   end
 end

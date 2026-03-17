@@ -1,0 +1,34 @@
+name: "mesh-simple"
+mode: mesh
+
+cluster_context: |
+  You're part of a small research team investigating the Hyrox fitness market.
+  Message others if you need info from their domain, but work independently.
+
+defaults:
+  model: haiku
+  max_turns: 50
+  permission_mode: bypassPermissions
+  timeout_minutes: 5
+
+mesh:
+  heartbeat_interval_seconds: 30
+  suspect_timeout_seconds: 90
+  dead_timeout_seconds: 180
+
+agents:
+  - name: market-sizing
+    role: "Market size and growth researcher"
+    prompt: |
+      Research the Hyrox fitness market. Find:
+      - Total revenue and growth rate
+      - Number of events and participants
+      - Geographic expansion patterns
+      Write a brief report with your findings.
+
+  - name: competitor-analysis
+    role: "Competitive landscape analyst"
+    prompt: |
+      Map the competitive landscape for Hyrox fitness products and software.
+      Identify key players, their products, pricing, and market gaps.
+      Write a brief competitive analysis report.

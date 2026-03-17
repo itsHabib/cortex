@@ -1,11 +1,12 @@
 defmodule Mix.Tasks.Cortex.Run do
-  @shortdoc "Run a Cortex orchestration (DAG or gossip mode)"
+  @shortdoc "Run a Cortex orchestration (DAG, gossip, or mesh mode)"
 
   @moduledoc """
   Runs a multi-agent orchestration defined in a YAML config file.
 
   Automatically detects the mode from the config:
   - `mode: gossip` → gossip exploration with peer agents
+  - `mode: mesh` → autonomous mesh agents with optional messaging
   - Default (no mode) → DAG orchestration with tiered teams
 
   ## Usage
@@ -22,6 +23,7 @@ defmodule Mix.Tasks.Cortex.Run do
 
       mix cortex.run orchestra.yaml
       mix cortex.run gossip.yaml --dry-run
+      mix cortex.run mesh.yaml --dry-run
       mix cortex.run orchestra.yaml --continue-on-error --workspace /tmp/run
 
   """
@@ -29,6 +31,7 @@ defmodule Mix.Tasks.Cortex.Run do
   use Mix.Task
 
   alias Cortex.Gossip.SessionRunner
+  alias Cortex.Mesh.SessionRunner, as: MeshSessionRunner
   alias Cortex.Orchestration.Runner
   alias Cortex.Orchestration.Summary
 
@@ -55,17 +58,46 @@ defmodule Mix.Tasks.Cortex.Run do
 
     case mode do
       :gossip -> run_gossip(config_path, runner_opts)
+      :mesh -> run_mesh(config_path, runner_opts)
       :dag -> run_dag(config_path, runner_opts)
     end
   end
 
   # -- Mode Detection ----------------------------------------------------------
 
-  @spec detect_mode(String.t()) :: :gossip | :dag
+  @spec detect_mode(String.t()) :: :gossip | :mesh | :dag
   defp detect_mode(config_path) do
     case YamlElixir.read_from_file(config_path) do
       {:ok, %{"mode" => "gossip"}} -> :gossip
+      {:ok, %{"mode" => "mesh"}} -> :mesh
       _ -> :dag
+    end
+  end
+
+  # -- Mesh Mode ---------------------------------------------------------------
+
+  defp run_mesh(config_path, opts) do
+    Mix.shell().info("\n=> Cortex Mesh Engine\n")
+
+    case MeshSessionRunner.run(config_path, opts) do
+      {:ok, %{status: :dry_run} = plan} ->
+        Mix.shell().info(format_mesh_dry_run(plan))
+
+      {:ok, summary} ->
+        Mix.shell().info(format_mesh_summary(summary))
+
+      {:error, reasons} when is_list(reasons) ->
+        Mix.shell().error("Mesh orchestration failed:")
+
+        Enum.each(reasons, fn reason ->
+          Mix.shell().error("  - #{reason}")
+        end)
+
+        exit({:shutdown, 1})
+
+      {:error, reason} ->
+        Mix.shell().error("Mesh orchestration failed: #{inspect(reason)}")
+        exit({:shutdown, 1})
     end
   end
 
@@ -271,5 +303,61 @@ defmodule Mix.Tasks.Cortex.Run do
     else
       "#{remaining_seconds}s"
     end
+  end
+
+  # -- Mesh Formatting ---------------------------------------------------------
+
+  @spec format_mesh_dry_run(map()) :: String.t()
+  defp format_mesh_dry_run(plan) do
+    agent_lines =
+      Enum.map(plan.agents, fn a ->
+        "    - #{a.name} (role: #{a.role}, model: #{a.model})"
+      end)
+
+    lines =
+      [
+        "DRY RUN (mesh mode) -- No agents will be spawned",
+        "",
+        "  Project:           #{plan.project}",
+        "  Agents:            #{plan.total_agents}",
+        "  Heartbeat:         #{plan.heartbeat_interval}s",
+        "  Suspect timeout:   #{plan.suspect_timeout}s",
+        "  Dead timeout:      #{plan.dead_timeout}s",
+        ""
+      ] ++ agent_lines
+
+    Enum.join(lines, "\n")
+  end
+
+  @spec format_mesh_summary(map()) :: String.t()
+  defp format_mesh_summary(summary) do
+    status_label =
+      case summary.status do
+        :complete -> "COMPLETE"
+        :partial -> "PARTIAL"
+        _ -> "FAILED"
+      end
+
+    duration = format_duration(summary.total_duration_ms)
+
+    agent_lines =
+      Enum.map(summary.agents, fn {name, info} ->
+        cost = Map.get(info, :cost_usd) || 0.0
+        "    - #{name}: #{info.status} ($#{:erlang.float_to_binary(cost, decimals: 4)})"
+      end)
+
+    lines =
+      [
+        "Mesh Session: #{summary.project}",
+        "",
+        "  Status:     #{status_label}",
+        "  Duration:   #{duration}",
+        "  Agents:     #{summary.total_agents}",
+        "  Total cost: $#{:erlang.float_to_binary(summary.total_cost, decimals: 4)}",
+        "",
+        "  Agent Results:"
+      ] ++ agent_lines
+
+    Enum.join(lines, "\n")
   end
 end
