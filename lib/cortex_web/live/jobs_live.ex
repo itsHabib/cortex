@@ -80,61 +80,59 @@ defmodule CortexWeb.JobsLive do
       </:actions>
     </.header>
 
-    <div class="flex gap-6 mt-6">
+    <div class="mt-6">
       <!-- Job list -->
-      <div class={if @selected_job_id, do: "w-1/2", else: "w-full"}>
-        <%= if @jobs == [] do %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
-            <p class="text-gray-400">No internal jobs yet.</p>
-            <p class="text-gray-500 text-sm mt-2">
-              Jobs appear here when you spawn agent summaries, debug reports, or coordinators from a run.
-            </p>
-          </div>
-        <% else %>
-          <div class="space-y-2">
-            <%= for job <- @jobs do %>
-              <div
-                phx-click="select_job"
-                phx-value-id={job.id}
-                class={[
-                  "bg-gray-900 rounded-lg border p-4 cursor-pointer transition-colors",
-                  if(@selected_job_id == job.id,
-                    do: "border-cortex-500 ring-1 ring-cortex-500/30",
-                    else: "border-gray-800 hover:border-gray-600"
-                  )
-                ]}
-              >
-                <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-                  <dt class="text-gray-500">Tool</dt>
-                  <dd class="text-white">{job_type_label(job.team_name)}</dd>
-                  <dt :if={job_target(job)} class="text-gray-500">Requester</dt>
-                  <dd :if={job_target(job)} class="text-gray-300">{job_target(job)}</dd>
-                  <dt :if={job.run} class="text-gray-500">Run</dt>
-                  <dd :if={job.run}>
-                    <a href={"/runs/#{job.run_id}"} class="text-cortex-400 hover:text-cortex-300">{job.run.name || truncate_id(job.run_id)}</a>
-                  </dd>
-                  <dt class="text-gray-500">Status</dt>
-                  <dd class={status_text_class(job.status)}>{job.status}</dd>
-                  <dt class="text-gray-500">Started</dt>
-                  <dd class="text-gray-400">{format_datetime(job.started_at)}</dd>
-                  <dt :if={job.completed_at} class="text-gray-500">Completed</dt>
-                  <dd :if={job.completed_at} class="text-gray-400">
-                    {format_datetime(job.completed_at)}
-                    <span :if={job.duration_ms} class="text-gray-600 ml-1">({format_duration(job.duration_ms)})</span>
-                  </dd>
-                  <dt :if={job.input_tokens || job.output_tokens} class="text-gray-500">Tokens</dt>
-                  <dd :if={job.input_tokens || job.output_tokens} class="text-gray-400">
-                    {job.input_tokens || 0} in / {job.output_tokens || 0} out
-                  </dd>
-                </dl>
-              </div>
-            <% end %>
-          </div>
-        <% end %>
-      </div>
+      <%= if @jobs == [] do %>
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
+          <p class="text-gray-400">No internal jobs yet.</p>
+          <p class="text-gray-500 text-sm mt-2">
+            Jobs appear here when you spawn agent summaries, debug reports, or coordinators from a run.
+          </p>
+        </div>
+      <% else %>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <%= for job <- @jobs do %>
+            <div
+              phx-click="select_job"
+              phx-value-id={job.id}
+              class={[
+                "bg-gray-900 rounded-lg border p-4 cursor-pointer transition-colors",
+                if(@selected_job_id == job.id,
+                  do: "border-cortex-500 ring-1 ring-cortex-500/30",
+                  else: "border-gray-800 hover:border-gray-600"
+                )
+              ]}
+            >
+              <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                <dt class="text-gray-500">Tool</dt>
+                <dd class="text-white font-medium">{job_type_label(job.team_name)}</dd>
+                <dt :if={job_target(job)} class="text-gray-500">Requester</dt>
+                <dd :if={job_target(job)} class="text-gray-300">{job_target(job)}</dd>
+                <dt :if={job.run} class="text-gray-500">Run</dt>
+                <dd :if={job.run}>
+                  <a href={"/runs/#{job.run_id}"} class="text-cortex-400 hover:text-cortex-300">{job.run.name || truncate_id(job.run_id)}</a>
+                </dd>
+                <dt class="text-gray-500">Status</dt>
+                <dd class={status_text_class(job.status)}>{job.status}</dd>
+                <dt class="text-gray-500">Started</dt>
+                <dd class="text-gray-400">{format_datetime(job.started_at)}</dd>
+                <dt :if={job.completed_at} class="text-gray-500">Completed</dt>
+                <dd :if={job.completed_at} class="text-gray-400">
+                  {format_datetime(job.completed_at)}
+                  <span :if={job.duration_ms} class="text-gray-600 ml-1">({format_duration(job.duration_ms)})</span>
+                </dd>
+                <dt :if={job.input_tokens || job.output_tokens} class="text-gray-500">Tokens</dt>
+                <dd :if={job.input_tokens || job.output_tokens} class="text-gray-400">
+                  {job.input_tokens || 0} in / {job.output_tokens || 0} out
+                </dd>
+              </dl>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
 
       <!-- Selected job detail -->
-      <div :if={@selected_job_id} class="w-1/2">
+      <div :if={@selected_job_id} class="mt-4">
         <% selected = Enum.find(@jobs, &(&1.id == @selected_job_id)) %>
         <%= if selected do %>
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 sticky top-4">
