@@ -2493,6 +2493,10 @@ defmodule CortexWeb.RunDetailLive do
                       <span class="break-all">{truncate(line.text, 200)}</span>
                     </div>
                   </div>
+                  <p class="text-xs text-gray-600 mt-2">
+                    Showing last 200 lines. For full logs, use the
+                    <button phx-click="switch_tab" phx-value-tab="logs" class="text-cortex-400 hover:text-cortex-300 underline">Logs tab</button>.
+                  </p>
                 <% else %>
                   <p class="text-gray-500 text-sm">
                     {if @selected_run_job.log_path, do: "No log content yet.", else: "No log path recorded."}
