@@ -7,17 +7,20 @@ defmodule Cortex.Mesh.Config.MeshSettings do
     - `heartbeat_interval_seconds` — seconds between heartbeat checks (default: 30)
     - `suspect_timeout_seconds` — seconds before a suspect member is declared dead (default: 90)
     - `dead_timeout_seconds` — seconds before cleaning up dead members (default: 180)
+    - `coordinator` — whether to spawn a lightweight coordinator agent (default: false)
 
   """
 
   defstruct heartbeat_interval_seconds: 30,
             suspect_timeout_seconds: 90,
-            dead_timeout_seconds: 180
+            dead_timeout_seconds: 180,
+            coordinator: false
 
   @type t :: %__MODULE__{
           heartbeat_interval_seconds: pos_integer(),
           suspect_timeout_seconds: pos_integer(),
-          dead_timeout_seconds: pos_integer()
+          dead_timeout_seconds: pos_integer(),
+          coordinator: boolean()
         }
 end
 

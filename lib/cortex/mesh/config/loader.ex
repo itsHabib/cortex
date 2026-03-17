@@ -96,7 +96,8 @@ defmodule Cortex.Mesh.Config.Loader do
     %MeshSettings{
       heartbeat_interval_seconds: Map.get(raw, "heartbeat_interval_seconds", 30),
       suspect_timeout_seconds: Map.get(raw, "suspect_timeout_seconds", 90),
-      dead_timeout_seconds: Map.get(raw, "dead_timeout_seconds", 180)
+      dead_timeout_seconds: Map.get(raw, "dead_timeout_seconds", 180),
+      coordinator: Map.get(raw, "coordinator", false) == true
     }
   end
 

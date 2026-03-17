@@ -36,6 +36,7 @@ defmodule Cortex.Mesh.SessionRunner do
 
   alias Cortex.Mesh.Config, as: MeshConfig
   alias Cortex.Mesh.Config.Loader
+  alias Cortex.Mesh.Coordinator.Lifecycle, as: CoordLifecycle
   alias Cortex.Mesh.Member
   alias Cortex.Mesh.{MemberList, MessageRelay, Prompt}
   alias Cortex.Messaging.InboxBridge
@@ -109,9 +110,11 @@ defmodule Cortex.Mesh.SessionRunner do
     existing_run_id = Keyword.get(opts, :run_id)
 
     agent_names = Enum.map(config.agents, & &1.name)
+    coordinator? = config.mesh.coordinator
 
-    # Step 1: Set up workspace directories
-    InboxBridge.setup(workspace_path, agent_names)
+    # Step 1: Set up workspace directories (include coordinator if enabled)
+    all_participants = if coordinator?, do: agent_names ++ ["coordinator"], else: agent_names
+    InboxBridge.setup(workspace_path, all_participants)
 
     # Step 2: Create DB records (reuse existing run_id if provided by caller)
     run_id = existing_run_id || create_run_record(config, workspace_path)
@@ -160,6 +163,12 @@ defmodule Cortex.Mesh.SessionRunner do
       agent_tasks =
         spawn_all_agents(config, prompts, workspace_path, command, run_id, member_list)
 
+      # Step 6b: Spawn coordinator if enabled
+      coordinator_task =
+        if coordinator? do
+          CoordLifecycle.spawn(config, workspace_path, command, run_id, roster)
+        end
+
       # Step 7: Start MessageRelay
       {:ok, relay_pid} =
         MessageRelay.start(
@@ -173,6 +182,9 @@ defmodule Cortex.Mesh.SessionRunner do
       results = await_agents(agent_tasks, timeout_ms)
 
       run_duration = System.monotonic_time(:millisecond) - run_start
+
+      # Stop coordinator (it runs for the session duration)
+      if coordinator_task, do: CoordLifecycle.stop(coordinator_task)
 
       # Step 9: Mark completed agents as :left
       Enum.each(results, fn {name, _status, _data} ->
