@@ -136,7 +136,20 @@ defmodule CortexWeb.RunDetailLive do
              :team_completed,
              :tier_started,
              :tier_completed,
-             :run_completed
+             :run_completed,
+             # Mesh lifecycle
+             :mesh_started,
+             :mesh_completed,
+             :member_joined,
+             :member_suspect,
+             :member_dead,
+             :member_left,
+             :member_alive,
+             # Gossip lifecycle
+             :gossip_started,
+             :gossip_completed,
+             :gossip_round_completed,
+             :gossip_early_termination
            ] do
     case socket.assigns.run do
       nil ->
@@ -151,9 +164,17 @@ defmodule CortexWeb.RunDetailLive do
         coordinator_alive =
           Runner.coordinator_alive?(run.id)
 
-        # Auto-generate summary on tier/run completion (with full diagnostics)
+        # Auto-generate summary on completion events (with full diagnostics)
+        completion_events = [
+          :tier_completed,
+          :run_completed,
+          :mesh_completed,
+          :gossip_completed,
+          :gossip_round_completed
+        ]
+
         run_summary =
-          if type in [:tier_completed, :run_completed] do
+          if type in completion_events do
             build_run_summary(updated_run || run, external_runs, socket.assigns.last_seen,
               include_diagnostics: true
             )
@@ -162,7 +183,7 @@ defmodule CortexWeb.RunDetailLive do
           end
 
         summaries =
-          if type in [:tier_completed, :run_completed] do
+          if type in completion_events do
             read_coordinator_summaries(updated_run || run)
           else
             socket.assigns.coordinator_summaries
@@ -1466,9 +1487,9 @@ defmodule CortexWeb.RunDetailLive do
           </div>
         </div>
 
-        <%= if gossip?(@run) do %>
-          <!-- Gossip Info -->
-          <% gossip_info = parse_gossip_info(@run) %>
+        <%= if non_dag?(@run) do %>
+          <!-- Gossip Info (gossip mode only) -->
+          <% gossip_info = if(gossip?(@run), do: parse_gossip_info(@run)) %>
           <%= if gossip_info do %>
             <div class="bg-gray-900 rounded-lg border border-purple-900/50 p-4 mb-6">
               <h2 class="text-sm font-medium text-purple-400 uppercase tracking-wider mb-3">Knowledge Exchange</h2>
@@ -1551,11 +1572,55 @@ defmodule CortexWeb.RunDetailLive do
             </div>
           <% end %>
 
-          <!-- Node Cards -->
-          <h2 class="text-lg font-semibold text-white mb-4">Nodes</h2>
+          <!-- Mesh Info (mesh mode only) -->
+          <%= if mesh?(@run) do %>
+            <% mesh_info = parse_mesh_info(@run) %>
+            <%= if mesh_info do %>
+              <div class="bg-gray-900 rounded-lg border border-emerald-900/50 p-4 mb-6">
+                <h2 class="text-sm font-medium text-emerald-400 uppercase tracking-wider mb-3">Mesh Membership</h2>
+                <p class="text-sm text-gray-400 mb-4">
+                  SWIM-inspired failure detection — {length(@team_runs)} autonomous agents with peer-to-peer messaging.
+                </p>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div class="bg-gray-950 rounded p-3">
+                    <span class="text-xs text-gray-500 block">Heartbeat</span>
+                    <span class="text-sm text-white">{mesh_info.heartbeat}s</span>
+                  </div>
+                  <div class="bg-gray-950 rounded p-3">
+                    <span class="text-xs text-gray-500 block">Suspect Timeout</span>
+                    <span class="text-sm text-yellow-300">{mesh_info.suspect_timeout}s</span>
+                  </div>
+                  <div class="bg-gray-950 rounded p-3">
+                    <span class="text-xs text-gray-500 block">Dead Timeout</span>
+                    <span class="text-sm text-red-300">{mesh_info.dead_timeout}s</span>
+                  </div>
+                  <div class="bg-gray-950 rounded p-3">
+                    <span class="text-xs text-gray-500 block">Status</span>
+                    <span class={["text-sm", if(@run.status == "completed", do: "text-green-400", else: if(@run.status == "running", do: "text-blue-400", else: "text-gray-400"))]}>
+                      {cond do
+                        @run.status == "completed" -> "Complete"
+                        @run.status == "running" -> "Active"
+                        @run.status == "failed" -> "Failed"
+                        true -> @run.status
+                      end}
+                    </span>
+                  </div>
+                </div>
+                <%= if mesh_info.cluster_context do %>
+                  <div class="mt-4 border-t border-emerald-900/30 pt-3">
+                    <h3 class="text-xs font-medium text-emerald-400 uppercase tracking-wider mb-2">Cluster Context</h3>
+                    <p class="text-sm text-gray-400">{truncate(mesh_info.cluster_context, 300)}</p>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          <% end %>
+
+          <!-- Node/Agent Cards -->
+          <h2 class="text-lg font-semibold text-white mb-4">{participant_label(@run, :plural)}</h2>
           <%= if @team_runs == [] do %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <p class="text-gray-400">No nodes recorded for this run.</p>
+              <p class="text-gray-400">No {participant_label(@run, :lower_plural)} recorded for this run.</p>
             </div>
           <% else %>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2296,8 +2361,16 @@ defmodule CortexWeb.RunDetailLive do
                 <dd class="text-sm text-gray-200">{length(@team_runs)}</dd>
               </div>
               <div>
-                <dt class="text-xs text-gray-500">{if gossip?(@run), do: "Rounds", else: "Tiers"}</dt>
-                <dd class="text-sm text-gray-200">{if gossip?(@run), do: (parse_gossip_info(@run) || %{rounds: 0}).rounds, else: length(@tiers)}</dd>
+                <dt class="text-xs text-gray-500">{cond do
+                  gossip?(@run) -> "Rounds"
+                  mesh?(@run) -> "Mode"
+                  true -> "Tiers"
+                end}</dt>
+                <dd class="text-sm text-gray-200">{cond do
+                  gossip?(@run) -> (parse_gossip_info(@run) || %{rounds: 0}).rounds
+                  mesh?(@run) -> "autonomous"
+                  true -> length(@tiers)
+                end}</dd>
               </div>
               <div>
                 <dt class="text-xs text-gray-500">Tokens</dt>
@@ -3306,11 +3379,29 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp gossip?(run), do: run.mode == "gossip"
+  defp mesh?(run), do: run.mode == "mesh"
+  defp non_dag?(run), do: gossip?(run) or mesh?(run)
 
-  # Terminology: gossip has "nodes", workflows have "teams"
-  defp participant_label(run, :singular), do: if(gossip?(run), do: "node", else: "team")
-  defp participant_label(run, :plural), do: if(gossip?(run), do: "Nodes", else: "Teams")
-  defp participant_label(run, :lower_plural), do: if(gossip?(run), do: "nodes", else: "teams")
+  # Terminology: gossip has "nodes", mesh has "agents", workflows have "teams"
+  defp participant_label(run, form) do
+    cond do
+      gossip?(run) -> gossip_label(form)
+      mesh?(run) -> mesh_label(form)
+      true -> team_label(form)
+    end
+  end
+
+  defp gossip_label(:singular), do: "node"
+  defp gossip_label(:plural), do: "Nodes"
+  defp gossip_label(:lower_plural), do: "nodes"
+
+  defp mesh_label(:singular), do: "agent"
+  defp mesh_label(:plural), do: "Agents"
+  defp mesh_label(:lower_plural), do: "agents"
+
+  defp team_label(:singular), do: "team"
+  defp team_label(:plural), do: "Teams"
+  defp team_label(:lower_plural), do: "teams"
 
   defp reconstruct_gossip_round(run) do
     if run.mode == "gossip" and run.gossip_rounds_total > 0 do
@@ -3350,6 +3441,27 @@ defmodule CortexWeb.RunDetailLive do
             topology: Map.get(gossip, "topology", "random"),
             rounds: Map.get(gossip, "rounds", 5),
             exchange_interval: Map.get(gossip, "exchange_interval_seconds", 60)
+          }
+
+        _ ->
+          nil
+      end
+    else
+      nil
+    end
+  end
+
+  defp parse_mesh_info(run) do
+    if run.config_yaml do
+      case YamlElixir.read_from_string(run.config_yaml) do
+        {:ok, raw} ->
+          mesh = Map.get(raw, "mesh", %{})
+
+          %{
+            heartbeat: Map.get(mesh, "heartbeat_interval_seconds", 30),
+            suspect_timeout: Map.get(mesh, "suspect_timeout_seconds", 90),
+            dead_timeout: Map.get(mesh, "dead_timeout_seconds", 180),
+            cluster_context: Map.get(raw, "cluster_context")
           }
 
         _ ->

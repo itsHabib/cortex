@@ -106,14 +106,15 @@ defmodule Cortex.Mesh.SessionRunner do
   defp execute(config, opts) do
     workspace_path = Keyword.get(opts, :workspace_path, ".")
     command = Keyword.get(opts, :command, "claude")
+    existing_run_id = Keyword.get(opts, :run_id)
 
     agent_names = Enum.map(config.agents, & &1.name)
 
     # Step 1: Set up workspace directories
     InboxBridge.setup(workspace_path, agent_names)
 
-    # Step 2: Create DB records
-    run_id = create_run_record(config, workspace_path)
+    # Step 2: Create DB records (reuse existing run_id if provided by caller)
+    run_id = existing_run_id || create_run_record(config, workspace_path)
     create_team_run_records(run_id, config, workspace_path)
 
     # Step 3: Start Mesh.Supervisor (MemberList + Detector)

@@ -43,6 +43,7 @@ defmodule CortexWeb.Router do
     live("/runs/:id/teams/:name", TeamDetailLive, :show)
     live("/workflows", NewRunLive, :index)
     live("/gossip", GossipLive, :index)
+    live("/mesh", MeshLive, :index)
     live("/jobs", JobsLive, :index)
   end
 
