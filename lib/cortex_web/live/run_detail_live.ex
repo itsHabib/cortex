@@ -64,6 +64,7 @@ defmodule CortexWeb.RunDetailLive do
            run_summary: nil,
            summary_jobs: [],
            summaries_expanded: false,
+           run_jobs: [],
            gossip_round: nil,
            gossip_knowledge: nil,
            pid_status: %{},
@@ -119,6 +120,7 @@ defmodule CortexWeb.RunDetailLive do
            run_summary: nil,
            summary_jobs: [],
            summaries_expanded: false,
+           run_jobs: [],
            gossip_round: reconstruct_gossip_round(run),
            gossip_knowledge: nil,
            pid_status: %{},
@@ -584,6 +586,11 @@ defmodule CortexWeb.RunDetailLive do
   def handle_event("switch_tab", %{"tab" => "summaries"}, socket) do
     summaries = read_coordinator_summaries(socket.assigns.run)
     {:noreply, assign(socket, current_tab: "summaries", coordinator_summaries: summaries)}
+  end
+
+  def handle_event("switch_tab", %{"tab" => "jobs"}, socket) do
+    jobs = get_run_jobs(socket.assigns.run)
+    {:noreply, assign(socket, current_tab: "jobs", run_jobs: jobs)}
   end
 
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
@@ -1384,7 +1391,7 @@ defmodule CortexWeb.RunDetailLive do
       <!-- Tab Bar -->
       <div class="flex border-b border-gray-800 mb-6">
         <button
-          :for={tab <- ~w(overview activity messages logs summaries diagnostics settings)}
+          :for={tab <- ~w(overview activity messages logs summaries diagnostics jobs settings)}
           phx-click="switch_tab"
           phx-value-tab={tab}
           class={[
@@ -2356,6 +2363,49 @@ defmodule CortexWeb.RunDetailLive do
         <% end %>
       </div>
 
+      <!-- ============ Jobs Tab ============ -->
+      <div :if={@current_tab == "jobs"}>
+        <%= if @run_jobs == [] do %>
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
+            <p class="text-gray-400">No internal jobs for this run.</p>
+            <p class="text-gray-500 text-sm mt-2">
+              Jobs appear here when you generate summaries, debug reports, or start coordinators.
+            </p>
+          </div>
+        <% else %>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div
+              :for={job <- @run_jobs}
+              class="bg-gray-900 rounded-lg border border-gray-800 p-4"
+            >
+              <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                <dt class="text-gray-500">Tool</dt>
+                <dd class="text-white font-medium">{job_type_label_for(job.team_name)}</dd>
+                <dt :if={job_target_from_role(job.role)} class="text-gray-500">Requester</dt>
+                <dd :if={job_target_from_role(job.role)} class="text-gray-300">{job_target_from_role(job.role)}</dd>
+                <dt class="text-gray-500">Status</dt>
+                <dd class={job_status_class(job.status)}>{job.status}</dd>
+                <dt class="text-gray-500">Started</dt>
+                <dd class="text-gray-400">{format_job_datetime(job.started_at)}</dd>
+                <dt :if={job.completed_at} class="text-gray-500">Completed</dt>
+                <dd :if={job.completed_at} class="text-gray-400">
+                  {format_job_datetime(job.completed_at)}
+                  <span :if={job.duration_ms} class="text-gray-600 ml-1">({format_job_duration(job.duration_ms)})</span>
+                </dd>
+                <dt :if={job.input_tokens || job.output_tokens} class="text-gray-500">Tokens</dt>
+                <dd :if={job.input_tokens || job.output_tokens} class="text-gray-400">
+                  {job.input_tokens || 0} in / {job.output_tokens || 0} out
+                </dd>
+                <dt :if={job.session_id} class="text-gray-500">Session</dt>
+                <dd :if={job.session_id} class="text-gray-400 font-mono truncate" title={job.session_id}>
+                  {String.slice(job.session_id, 0, 12)}...
+                </dd>
+              </dl>
+            </div>
+          </div>
+        <% end %>
+      </div>
+
       <!-- ============ Settings Tab ============ -->
       <div :if={@current_tab == "settings"}>
         <% config = parse_run_config(@run) %>
@@ -3101,6 +3151,12 @@ defmodule CortexWeb.RunDetailLive do
   defp tab_label("messages", _assigns), do: "Messages"
   defp tab_label("logs", _assigns), do: "Logs"
   defp tab_label("diagnostics", _assigns), do: "Diagnostics"
+
+  defp tab_label("jobs", assigns) do
+    count = length(assigns.run_jobs)
+    if count > 0, do: "Jobs (#{count})", else: "Jobs"
+  end
+
   defp tab_label(tab, _assigns), do: String.capitalize(tab)
 
   # -- Stalled detection (Priority 3) --
@@ -3257,6 +3313,52 @@ defmodule CortexWeb.RunDetailLive do
   defp job_label(:completed), do: "Done"
   defp job_label(:failed), do: "Failed"
   defp job_label(_), do: "Unknown"
+
+  defp get_run_jobs(run) do
+    if run do
+      run.id
+      |> safe_get_team_runs()
+      |> Enum.filter(& &1.internal)
+      |> Enum.sort_by(& &1.started_at, {:desc, DateTime})
+    else
+      []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp job_type_label_for("coordinator"), do: "Coordinator"
+  defp job_type_label_for("summary-agent"), do: "Summary"
+  defp job_type_label_for("debug-agent"), do: "Debug Report"
+  defp job_type_label_for(name), do: name
+
+  defp job_target_from_role(nil), do: nil
+
+  defp job_target_from_role(role) do
+    case String.split(role, " — ", parts: 2) do
+      [_, target] -> target
+      _ -> nil
+    end
+  end
+
+  defp job_status_class("completed"), do: "text-green-300"
+  defp job_status_class("running"), do: "text-blue-300"
+  defp job_status_class("failed"), do: "text-red-300"
+  defp job_status_class(_), do: "text-gray-400"
+
+  defp format_job_datetime(nil), do: "—"
+  defp format_job_datetime(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
+  defp format_job_datetime(%NaiveDateTime{} = ndt), do: Calendar.strftime(ndt, "%Y-%m-%d %H:%M:%S")
+  defp format_job_datetime(_), do: "—"
+
+  defp format_job_duration(nil), do: nil
+  defp format_job_duration(ms) when ms < 60_000, do: "#{div(ms, 1000)}s"
+
+  defp format_job_duration(ms) do
+    mins = div(ms, 60_000)
+    secs = div(rem(ms, 60_000), 1000)
+    "#{mins}m #{String.pad_leading(to_string(secs), 2, "0")}s"
+  end
 
   defp lookup_internal_tokens(run, team_name) do
     if run do
