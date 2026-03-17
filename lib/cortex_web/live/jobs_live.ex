@@ -104,30 +104,29 @@ defmodule CortexWeb.JobsLive do
                   )
                 ]}
               >
-                <div class="flex items-center justify-between mb-2">
-                  <div class="flex items-center gap-3">
-                    <span class={["text-xs font-medium px-2 py-0.5 rounded", status_badge_class(job.status)]}>
-                      {job.status}
-                    </span>
-                    <span class="text-sm">
-                      <span class="font-medium text-white">{job_type_label(job.team_name)}</span>
-                      <span :if={job_target(job)} class="text-gray-400"> ({job_target(job)})</span>
-                    </span>
-                  </div>
-                  <span class="text-xs text-gray-500">{format_datetime(job.started_at)}</span>
-                </div>
-                <div class="flex items-center gap-4 text-xs text-gray-400">
-                  <span :if={job.run} class="text-gray-600">
-                    run: <a href={"/runs/#{job.run_id}"} class="text-cortex-400 hover:text-cortex-300">{job.run.name || truncate_id(job.run_id)}</a>
-                  </span>
-                  <span :if={job.input_tokens || job.output_tokens} class="text-gray-500">
+                <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                  <dt class="text-gray-500">Tool</dt>
+                  <dd class="text-white">{job_type_label(job.team_name)}</dd>
+                  <dt :if={job_target(job)} class="text-gray-500">Requester</dt>
+                  <dd :if={job_target(job)} class="text-gray-300">{job_target(job)}</dd>
+                  <dt :if={job.run} class="text-gray-500">Run</dt>
+                  <dd :if={job.run}>
+                    <a href={"/runs/#{job.run_id}"} class="text-cortex-400 hover:text-cortex-300">{job.run.name || truncate_id(job.run_id)}</a>
+                  </dd>
+                  <dt class="text-gray-500">Status</dt>
+                  <dd class={status_text_class(job.status)}>{job.status}</dd>
+                  <dt class="text-gray-500">Started</dt>
+                  <dd class="text-gray-400">{format_datetime(job.started_at)}</dd>
+                  <dt :if={job.completed_at} class="text-gray-500">Completed</dt>
+                  <dd :if={job.completed_at} class="text-gray-400">
+                    {format_datetime(job.completed_at)}
+                    <span :if={job.duration_ms} class="text-gray-600 ml-1">({format_duration(job.duration_ms)})</span>
+                  </dd>
+                  <dt :if={job.input_tokens || job.output_tokens} class="text-gray-500">Tokens</dt>
+                  <dd :if={job.input_tokens || job.output_tokens} class="text-gray-400">
                     {job.input_tokens || 0} in / {job.output_tokens || 0} out
-                  </span>
-                </div>
-                <div :if={job.status in ["completed", "failed"] and job.completed_at} class="mt-2 text-xs text-gray-500">
-                  Completed {format_datetime(job.completed_at)}
-                  <span :if={job.duration_ms}> — {format_duration(job.duration_ms)}</span>
-                </div>
+                  </dd>
+                </dl>
               </div>
             <% end %>
           </div>
@@ -273,13 +272,6 @@ defmodule CortexWeb.JobsLive do
   end
 
   defp job_target(_), do: nil
-
-  defp status_badge_class("running"), do: "bg-blue-900/50 text-blue-300"
-  defp status_badge_class("completed"), do: "bg-green-900/50 text-green-300"
-  defp status_badge_class("failed"), do: "bg-red-900/50 text-red-300"
-  defp status_badge_class("stopped"), do: "bg-orange-900/50 text-orange-300"
-  defp status_badge_class("pending"), do: "bg-gray-800/50 text-gray-400"
-  defp status_badge_class(_), do: "bg-gray-800/50 text-gray-400"
 
   defp status_text_class("running"), do: "text-blue-300"
   defp status_text_class("completed"), do: "text-green-300"
