@@ -2,20 +2,60 @@
 
 Multi-agent orchestration system built on Elixir/OTP. Cortex manages teams of AI agents that collaborate on complex, multi-step objectives via `claude -p` processes.
 
-It supports two coordination modes: **DAG orchestration** for structured, dependency-aware execution, and **gossip protocol** for emergent, decentralized knowledge sharing.
+It supports three coordination modes: **DAG orchestration** for structured, dependency-aware execution, **mesh** for autonomous agents with optional peer messaging, and **gossip protocol** for emergent, decentralized knowledge sharing.
+
+Built on Elixir/OTP because the problem is inherently concurrent — dozens of long-lived agent processes, message routing, failure detection, real-time streaming. OTP provides supervision trees, GenServers, Erlang ports, PubSub, and Phoenix LiveView out of the box. Every piece of infrastructure that would need to be hand-rolled in other stacks comes for free.
 
 ![DAG overview — run in progress](priv/static/images/dag-overview.jpg)
 
-## Why Elixir?
+## Table of Contents
 
-Running dozens of long-lived AI agent processes, routing messages between them, detecting failures, and streaming real-time updates to a dashboard — this is exactly what OTP was built for. Cortex uses supervision trees for fault tolerance, GenServers for per-agent state, Erlang ports for process management, PubSub for event streaming, and Phoenix LiveView for a real-time dashboard with zero polling. Every piece of infrastructure that would need to be hand-rolled in other stacks comes out of the box.
+- [Modes](#modes)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Workspace Layout](#workspace-layout)
+- [Development](#development)
+- [Project Structure](#project-structure)
+
+## Modes
+
+Cortex supports three coordination modes. Each mode defines how agents are organized, how they communicate, and how much coordination is imposed.
+
+### Workflow (DAG)
+
+Structured, dependency-aware execution. Define teams with explicit dependencies — Cortex builds a DAG, sorts into parallel tiers via Kahn's algorithm, and executes tier by tier. Upstream results are injected into downstream prompts.
+
+**Use when:** you have a multi-step project with clear dependencies (backend before frontend, research before implementation).
+
+- Teams run in parallel within a tier, sequentially across tiers
+- Fault recovery — continue interrupted runs, resume stalled sessions, restart with injected log history
+- File-based messaging — coordinator can send mid-run guidance to teams
+
+### Mesh
+
+Autonomous agents with optional peer messaging. Each agent gets a roster of who else is in the cluster and can message them if needed, but there's no forced coordination. Agents work independently on their assignments and reach out only when they need info from another agent's domain.
+
+**Use when:** you have parallel workstreams that are mostly independent but might benefit from occasional cross-talk (multiple researchers, parallel feature builds, distributed analysis).
+
+- SWIM-inspired membership — agents tracked through alive → suspect → dead lifecycle states
+- Failure detection — periodic heartbeat checks with configurable suspect/dead timeouts
+- Message relay — outbox polling delivers cross-agent messages via file-based inboxes
+- Thin orchestrator (~300 LOC) — spawn agents, provide roster, get out of the way
+
+### Gossip
+
+Emergent, decentralized knowledge sharing. Agents explore different angles of a topic independently. A coordinator periodically reads their findings, runs gossip protocol exchanges between knowledge stores, and delivers merged knowledge back to agents.
+
+**Use when:** you want multiple agents exploring a broad topic and cross-pollinating ideas (market research, brainstorming, literature review).
+
+- CRDT-backed knowledge stores with vector clocks for conflict-free convergence
+- Push-pull exchange — agents compare digests, fetch missing/newer entries, merge with causal ordering
+- Topology strategies — full mesh, ring, and random-k peering
+- Optional coordinator agent that can steer exploration and terminate early
 
 ## Features
-
-### Orchestration
-- **DAG-based execution** — define teams with dependencies in YAML, execute in parallel tiers via Kahn's algorithm
-- **Fault recovery** — continue interrupted runs (skips completed teams), resume stalled sessions via `claude --resume`, or restart with injected log history
-- **File-based messaging** — inbox/outbox per team, outbox watcher polls for progress, coordinator can message teams mid-run
 
 ### Observability
 - **Live token tracking** — NDJSON usage parsed in real-time, streamed to LiveView via PubSub
@@ -23,11 +63,6 @@ Running dozens of long-lived AI agent processes, routing messages between them, 
 - **Stalled detection** — teams flagged after 5 minutes of silence, with per-team health indicators
 - **Diagnostics** — LogParser structures NDJSON into timelines with auto-diagnosis (died during tool use, hit max turns, rate limited, no session, etc.)
 - **Telemetry + Prometheus + Grafana** — structured telemetry events, `/metrics` endpoint, pre-configured dashboards
-
-### Gossip Protocol
-- **CRDT-backed knowledge stores** — per-agent GenServers with vector clocks for conflict-free convergence
-- **Push-pull exchange** — agents compare digests, fetch missing/newer entries, merge with causal ordering
-- **Topology strategies** — full mesh, ring, and random-k peering
 
 ### Dashboard (Phoenix LiveView)
 - **Run detail** — 5 tabs: Overview, Activity, Messages, Logs, Diagnostics
@@ -78,6 +113,12 @@ mix run -e 'Cortex.Orchestration.Runner.run("orchestra.yaml") |> IO.inspect()'
 # Gossip run
 mix run -e 'Cortex.Gossip.SessionRunner.run("gossip.yaml") |> IO.inspect()'
 
+# Mesh run
+mix cortex.run examples/mesh-simple.yaml
+
+# Mesh dry run
+mix cortex.run examples/mesh-simple.yaml --dry-run
+
 # Resume stalled teams in an existing workspace
 mix cortex.resume /path/to/workspace
 
@@ -95,7 +136,7 @@ make up    # Phoenix:4000 + Prometheus:9090 + Grafana:3000 (admin/cortex)
 
 ## Configuration
 
-Projects are defined in YAML. Two modes:
+Projects are defined in YAML. Three modes:
 
 **DAG workflow** — teams with dependencies, executed in parallel tiers:
 
@@ -110,6 +151,20 @@ teams:
     depends_on: [backend]
 ```
 
+**Mesh** — autonomous agents with optional peer messaging:
+
+```yaml
+mode: mesh
+mesh: { heartbeat_interval_seconds: 30, suspect_timeout_seconds: 90 }
+agents:
+  - name: market-sizing
+    role: "Market researcher"
+    prompt: "Research market size and growth..."
+  - name: competitor-analysis
+    role: "Competitive analyst"
+    prompt: "Map the competitive landscape..."
+```
+
 **Gossip** — agents explore independently, knowledge exchanged periodically:
 
 ```yaml
@@ -121,7 +176,7 @@ agents:
     prompt: "Research the top 5 competitors..."
 ```
 
-See `examples/` for complete configs (`dag-demo.yaml`, `gossip-simple.yaml`).
+See `examples/` for complete configs (`dag-demo.yaml`, `gossip-simple.yaml`, `mesh-simple.yaml`).
 
 ### Config Reference
 
@@ -130,7 +185,7 @@ See `examples/` for complete configs (`dag-demo.yaml`, `gossip-simple.yaml`).
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `name` | Yes | — | Project name |
-| `mode` | No | `"workflow"` | `workflow` (DAG) or `gossip` |
+| `mode` | No | `"workflow"` | `workflow` (DAG), `gossip`, or `mesh` |
 | `workspace_path` | No | `"."` | Directory for `.cortex/` workspace |
 | `defaults.model` | No | `"sonnet"` | Default LLM model |
 | `defaults.max_turns` | No | `200` | Max conversation turns |
@@ -148,6 +203,20 @@ See `examples/` for complete configs (`dag-demo.yaml`, `gossip-simple.yaml`).
 | `teams[].tasks` | Yes | — | At least one task |
 | `teams[].depends_on` | No | `[]` | Team dependencies (by name) |
 | `teams[].context` | No | — | Additional prompt context |
+
+**Mesh fields:**
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `mesh.heartbeat_interval_seconds` | No | `30` | Seconds between heartbeat checks |
+| `mesh.suspect_timeout_seconds` | No | `90` | Seconds before suspect → dead |
+| `mesh.dead_timeout_seconds` | No | `180` | Seconds before dead member cleanup |
+| `cluster_context` | No | — | Shared context for all agents |
+| `agents[].name` | Yes | — | Unique agent identifier |
+| `agents[].role` | Yes | — | Agent role description |
+| `agents[].prompt` | Yes | — | Agent instructions |
+| `agents[].model` | No | project default | Model override |
+| `agents[].metadata` | No | `{}` | Arbitrary key-value metadata |
 
 **Gossip fields:**
 
@@ -185,22 +254,17 @@ Cortex.Supervisor (one_for_one)
   |-- CortexWeb.Endpoint (Phoenix)
 ```
 
-### DAG Orchestration (`lib/cortex/orchestration/`)
+### Orchestration (`lib/cortex/orchestration/`)
 
-The engine loads YAML configs, builds a dependency DAG via Kahn's algorithm, and executes teams in parallel tiers. Each team spawns a `claude -p` process through Erlang ports, streams NDJSON for real-time tracking, and records results to both the workspace and DB.
+Runner, DAG engine, Spawner (port-based process management, NDJSON parsing), Workspace management, prompt Injection, LogParser, Config.Loader.
 
-Key modules:
-- **Runner** — orchestrator: `run/2`, `continue_run/2`, `resume_run/2`
-- **DAG** — topological sort into execution tiers
-- **Spawner** — port-based process management, NDJSON parsing, session ID extraction, rate limit detection
-- **Workspace** — `.cortex/` directory management (state, registry, logs, results, messages)
-- **Injection** — prompt construction with role, tasks, upstream results, inbox instructions
-- **LogParser** — NDJSON log parsing with auto-diagnosis
-- **Config.Loader** — YAML validation into typed structs
+### Mesh (`lib/cortex/mesh/`)
 
-### Gossip Protocol (`lib/cortex/gossip/`)
+Member struct with state machine, MemberList GenServer, Detector (heartbeat), Prompt builder, MessageRelay, SessionRunner (~300 LOC), ephemeral Supervisor.
 
-Each agent has a KnowledgeStore GenServer holding entries with vector clocks. Push-pull exchanges compare digests, transfer missing/newer entries, and merge with causal ordering. Concurrent conflicts resolve by confidence score, then timestamp.
+### Gossip (`lib/cortex/gossip/`)
+
+KnowledgeStore GenServers with vector clocks, push-pull Protocol, Topology strategies, SessionRunner (~1,200 LOC coordinator).
 
 ### Messaging (`lib/cortex/messaging/`)
 
@@ -242,7 +306,7 @@ Each run creates a `.cortex/` directory:
 ## Development
 
 ```bash
-mix test                              # 692 tests
+mix test                              # run all tests
 mix test --trace                      # verbose output
 mix test test/cortex/orchestration/   # specific directory
 mix format                            # format code
@@ -269,6 +333,7 @@ cortex/
       agent/                      # Agent GenServer, Config, State, Registry
       coordinator/                # Coordinator prompt building
       gossip/                     # KnowledgeStore, Protocol, VectorClock, Topology
+      mesh/                       # Member, MemberList, Detector, Prompt, SessionRunner
       messaging/                  # InboxBridge, OutboxWatcher, Router, Mailbox, Bus
       orchestration/              # Runner, DAG, Spawner, Workspace, Config, LogParser
       perf/                       # Profiler utilities
