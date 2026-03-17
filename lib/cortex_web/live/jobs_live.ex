@@ -109,14 +109,17 @@ defmodule CortexWeb.JobsLive do
                     <span class={["text-xs font-medium px-2 py-0.5 rounded", status_badge_class(job.status)]}>
                       {job.status}
                     </span>
-                    <span class="font-medium text-white text-sm">{job_type_label(job.team_name)}</span>
+                    <span class="font-medium text-white text-sm">Tool: {job_type_label(job.team_name)}</span>
+                    <span :if={job_target(job)} class="text-gray-400 text-sm">— {job_target(job)}</span>
                   </div>
                   <span class="text-xs text-gray-500">{format_datetime(job.started_at)}</span>
                 </div>
                 <div class="flex items-center gap-4 text-xs text-gray-400">
-                  <span :if={job.role} class="text-gray-500">{job.role}</span>
                   <span :if={job.run} class="text-gray-600">
                     run: <a href={"/runs/#{job.run_id}"} class="text-cortex-400 hover:text-cortex-300">{job.run.name || truncate_id(job.run_id)}</a>
+                  </span>
+                  <span :if={job.input_tokens || job.output_tokens} class="text-gray-500">
+                    {job.input_tokens || 0} in / {job.output_tokens || 0} out
                   </span>
                 </div>
                 <div :if={job.status in ["completed", "failed"] and job.completed_at} class="mt-2 text-xs text-gray-500">
@@ -255,9 +258,19 @@ defmodule CortexWeb.JobsLive do
   end
 
   defp job_type_label("coordinator"), do: "Coordinator"
-  defp job_type_label("summary-agent"), do: "Agent Summary"
+  defp job_type_label("summary-agent"), do: "Summary"
   defp job_type_label("debug-agent"), do: "Debug Report"
   defp job_type_label(name), do: name
+
+  # Extract the target from the role, e.g. "Debug Report — competitor-analysis" → "competitor-analysis"
+  defp job_target(%{role: role}) when is_binary(role) do
+    case String.split(role, " — ", parts: 2) do
+      [_, target] -> target
+      _ -> nil
+    end
+  end
+
+  defp job_target(_), do: nil
 
   defp status_badge_class("running"), do: "bg-blue-900/50 text-blue-300"
   defp status_badge_class("completed"), do: "bg-green-900/50 text-green-300"
