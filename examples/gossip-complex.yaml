@@ -1,0 +1,156 @@
+name: "gossip-complex"
+mode: gossip
+
+cluster_context: |
+  You are part of a product design team collaborating on a mobile fitness
+  app called "FitPulse" — a social workout tracker targeting casual gym-goers
+  aged 25-40. The app should differentiate from Strava (too competitive)
+  and MyFitnessPal (too calorie-focused) by emphasizing consistency,
+  community, and fun.
+
+  Collaboration protocol:
+  - Each agent explores their assigned angle, then shares insights via gossip.
+  - Build on what you learn from others — remix ideas, challenge assumptions.
+  - The coordinator will synthesize findings across rounds and may redirect.
+  - By the final round, converge on a concrete MVP feature set.
+
+defaults:
+  model: haiku
+  max_turns: 50
+  permission_mode: bypassPermissions
+  timeout_minutes: 10
+
+gossip:
+  rounds: 5
+  topology: ring
+  exchange_interval_seconds: 25
+  coordinator: true
+
+agents:
+  - name: user-research
+    topic: "user needs"
+    prompt: |
+      Explore user needs for FitPulse, a social workout tracker for casual
+      gym-goers aged 25-40.
+
+      Research angles:
+      - Why do casual gym-goers quit apps within 2 weeks?
+      - What motivates consistency: streaks, social pressure, or rewards?
+      - Pain points with existing apps (too complex, too competitive, guilt-inducing)
+      - What would make someone open this app daily vs weekly?
+
+      Share your insights each round. Incorporate feedback from other agents
+      — especially feature-ideation and ux-design. Challenge assumptions
+      that don't match real user behavior.
+
+  - name: feature-ideation
+    topic: "features"
+    prompt: |
+      Brainstorm features for FitPulse that differentiate it from Strava
+      and MyFitnessPal. Target: casual gym-goers aged 25-40.
+
+      Explore:
+      - "Gentle accountability" features (not hardcore streaks)
+      - Social features that feel supportive, not competitive
+      - Gamification that rewards consistency over intensity
+      - Workout logging that takes <30 seconds
+      - Integration ideas (Apple Health, Spotify, gym check-in)
+
+      Each round, propose 3-5 features. Refine based on user-research
+      findings and monetization feasibility. By round 5, narrow to your
+      top 5 MVP features with one-line rationale each.
+
+  - name: monetization
+    topic: "revenue"
+    model: sonnet
+    prompt: |
+      Design the monetization strategy for FitPulse. The app targets
+      casual gym-goers aged 25-40 — price-sensitive but willing to pay
+      for value.
+
+      Explore:
+      - Freemium vs free trial vs ad-supported models
+      - What features justify a paid tier ($4.99-9.99/mo)?
+      - B2B2C angle: could gyms pay to integrate?
+      - Marketplace potential: personal trainers, workout plans
+      - Retention economics: LTV vs CAC for fitness apps (typically 3:1)
+
+      Share revenue model drafts each round. Adjust based on feature
+      proposals and competitive landscape. By round 5, propose a
+      specific pricing structure with projected conversion rates.
+
+  - name: ux-design
+    topic: "design"
+    prompt: |
+      Design the UX for FitPulse's core flows. Target: casual gym-goers
+      who find most fitness apps overwhelming.
+
+      Explore:
+      - Onboarding: how to capture goals without a 15-screen wizard
+      - Home screen: what does the user see when they open the app?
+      - Workout logging: minimal-tap flow (3 taps to log a workout)
+      - Social feed: supportive vibes, not Strava-style leaderboards
+      - Notification strategy: motivating without being annoying
+
+      Each round, describe 1-2 key screens or flows. Incorporate
+      user-research insights on what casual users actually want.
+      By round 5, deliver a coherent flow map for the MVP.
+
+  - name: competitive-intel
+    topic: "market"
+    prompt: |
+      Map the competitive landscape for FitPulse. Focus on the gap
+      between hardcore fitness apps and simple step counters.
+
+      Analyze:
+      - Strava: why casual users feel intimidated
+      - MyFitnessPal: why calorie tracking causes guilt/churn
+      - Strong, Hevy, JEFIT: gym-specific but complex
+      - Gentler alternatives: Wakeout, FitOn, Nike Training Club
+      - Emerging: BeReal-style fitness apps, TikTok fitness creators
+
+      Each round, share competitive insights. Highlight gaps and
+      positioning opportunities. By round 5, define FitPulse's
+      competitive positioning statement (2-3 sentences).
+
+  - name: technical-feasibility
+    topic: "architecture"
+    prompt: |
+      Assess technical feasibility and architecture for FitPulse MVP.
+      Target: ship in 8 weeks with 2 engineers.
+
+      Evaluate:
+      - React Native vs Flutter vs native for cross-platform MVP
+      - Backend: serverless (Supabase/Firebase) vs custom API
+      - Real-time features: what's feasible in 8 weeks vs V2?
+      - Apple Health / Google Fit integration complexity
+      - Offline support requirements for gym environments (poor signal)
+      - Push notification infrastructure
+
+      Each round, flag technical constraints that affect feature
+      proposals. By round 5, deliver a recommended tech stack and
+      an 8-week build timeline with weekly milestones.
+
+seed_knowledge:
+  - topic: "market context"
+    content: |
+      Fitness app market: $13B (2023), growing 17% CAGR. 75% of users
+      churn within 30 days. The "casual gym-goer" segment (3-4x/week,
+      no coach, no competition) is underserved — most apps target either
+      beginners or athletes. Average fitness app subscription: $9.99/mo
+      with 4-6% free-to-paid conversion.
+  - topic: "user persona"
+    content: |
+      Primary persona: "Alex" — 32, goes to gym 3x/week, uses Apple Watch,
+      tried Strava (too competitive), tried MyFitnessPal (too tedious).
+      Wants: simple logging, to see that they're consistent, to share wins
+      with close friends (not public). Willing to pay $5-7/mo if the app
+      "just works." Biggest fear: another app that makes them feel bad.
+  - topic: "design principles"
+    content: |
+      Core design principles for FitPulse:
+      1. Celebrate consistency, not intensity
+      2. 3-tap maximum for any core action
+      3. Social = supportive (no leaderboards, no public rankings)
+      4. Never guilt the user (no "you missed your workout" notifications)
+      5. Data is private by default, shared by choice

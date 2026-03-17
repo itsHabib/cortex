@@ -1,0 +1,219 @@
+name: "dag-complex"
+
+defaults:
+  model: haiku
+  max_turns: 80
+  permission_mode: bypassPermissions
+  timeout_minutes: 15
+
+teams:
+  # --- Tier 0: Four parallel research teams (no dependencies) ---
+  - name: requirements
+    lead:
+      role: "Requirements Analyst"
+    members:
+      - role: "Domain Expert"
+        focus: "bookstore inventory workflows"
+      - role: "Stakeholder Liaison"
+        focus: "end-user needs and acceptance criteria"
+    context: |
+      This is a REST API for a bookstore inventory system. The system must
+      handle books, authors, categories, stock levels, and search. Think
+      about both the customer-facing catalog and the staff-facing inventory
+      management needs.
+    tasks:
+      - summary: "Gather functional requirements for the bookstore API"
+        details: |
+          Write a requirements document for a REST API serving a bookstore
+          inventory system. Cover: CRUD for books/authors/categories, stock
+          tracking (add/remove/transfer), search and filtering, pagination,
+          and bulk import. Define user personas (customer, staff, admin).
+        deliverables:
+          - "requirements.md"
+        verify: "test -f requirements.md && wc -l requirements.md | awk '{if ($1 > 10) exit 0; else exit 1}'"
+      - summary: "Define non-functional requirements"
+        details: |
+          Specify non-functional requirements: expected request volume,
+          response time SLAs, data consistency guarantees, and availability
+          targets. Keep it concise — 10-15 lines.
+        deliverables:
+          - "nfr.md"
+    depends_on: []
+
+  - name: api-design
+    lead:
+      role: "API Designer"
+    members:
+      - role: "REST Standards Reviewer"
+        focus: "OpenAPI conventions and HTTP semantics"
+    context: |
+      Follow RESTful conventions strictly. Use plural nouns for resources,
+      proper HTTP verbs, and standard status codes. Design for both JSON
+      request/response bodies.
+    tasks:
+      - summary: "Design the REST API contract"
+        details: |
+          Design the full REST API surface for a bookstore inventory system.
+          Define endpoints for: books (CRUD + search), authors (CRUD + list
+          books), categories (CRUD + tree structure), inventory (stock
+          adjustments, transfers, low-stock alerts). Include request/response
+          schemas, query parameters for filtering and pagination, and error
+          response format.
+        deliverables:
+          - "api-design.md"
+        verify: "grep -q 'GET\\|POST\\|PUT\\|DELETE' api-design.md"
+    depends_on: []
+
+  - name: data-modeling
+    lead:
+      role: "Data Architect"
+      model: sonnet
+    members:
+      - role: "Database Engineer"
+        focus: "PostgreSQL schema design and indexing"
+    tasks:
+      - summary: "Design the database schema"
+        details: |
+          Design a PostgreSQL schema for the bookstore inventory system.
+          Include tables for: books, authors, categories (hierarchical),
+          book_authors (M2M), inventory_locations, stock_levels, and
+          stock_transactions. Define primary keys, foreign keys, indexes,
+          and constraints. Include an ER diagram in ASCII.
+        deliverables:
+          - "data-model.md"
+          - "schema.sql"
+        verify: "test -f data-model.md"
+    depends_on: []
+
+  - name: security-audit
+    lead:
+      role: "Security Engineer"
+    tasks:
+      - summary: "Define security requirements and threat model"
+        details: |
+          Produce a lightweight threat model for the bookstore API. Cover:
+          authentication (JWT vs API keys), authorization (RBAC for
+          customer/staff/admin), input validation, rate limiting, SQL
+          injection prevention, and audit logging. List the top 5 threats
+          and their mitigations.
+        deliverables:
+          - "security-audit.md"
+    depends_on: []
+
+  # --- Tier 1: Two teams that depend on Tier 0 ---
+  - name: architecture
+    lead:
+      role: "Software Architect"
+      model: sonnet
+    members:
+      - role: "Backend Engineer"
+        focus: "Go project structure and dependency injection"
+      - role: "DevOps Engineer"
+        focus: "containerization and deployment topology"
+    context: |
+      The implementation will be in Go. Use standard library where possible,
+      chi or gorilla/mux for routing, sqlx for database access. Follow
+      clean architecture with clear layer separation.
+    tasks:
+      - summary: "Design the system architecture"
+        details: |
+          Based on upstream requirements, API design, and data model,
+          design the Go application architecture. Define: package structure,
+          layer boundaries (handler → service → repository), dependency
+          injection approach, configuration management, and middleware
+          chain. Include a component diagram.
+        deliverables:
+          - "architecture.md"
+        verify: "grep -qi 'handler\\|service\\|repository' architecture.md"
+      - summary: "Define the deployment architecture"
+        details: |
+          Specify: Dockerfile, docker-compose for local dev (app + postgres),
+          environment variables, health check endpoint, and graceful
+          shutdown. Keep it to ~15 lines.
+        deliverables:
+          - "deployment.md"
+    depends_on:
+      - requirements
+      - api-design
+      - data-modeling
+
+  - name: test-plan
+    lead:
+      role: "QA Lead"
+    members:
+      - role: "Test Engineer"
+        focus: "integration and end-to-end test design"
+    tasks:
+      - summary: "Write the comprehensive test plan"
+        details: |
+          Based on the requirements and security audit, write a test plan
+          covering: unit tests (service layer), integration tests (repository
+          + real DB), API tests (HTTP handler layer), and security tests
+          (auth, authz, input validation). List 15-20 specific test cases
+          with input, expected output, and priority (P0/P1/P2).
+        deliverables:
+          - "test-plan.md"
+        verify: "grep -c 'P0\\|P1\\|P2' test-plan.md | awk '{if ($1 >= 5) exit 0; else exit 1}'"
+    depends_on:
+      - requirements
+      - security-audit
+
+  # --- Tier 2: Implementation (fan-in from 3 upstream teams) ---
+  - name: implementation
+    lead:
+      role: "Tech Lead"
+      model: sonnet
+    members:
+      - role: "Senior Backend Engineer"
+        focus: "core CRUD and business logic"
+      - role: "Backend Engineer"
+        focus: "search, pagination, and filtering"
+      - role: "Backend Engineer"
+        focus: "inventory operations and stock management"
+    context: |
+      You have access to the architecture, test plan, and security audit
+      from upstream teams. Implement the Go code following the architecture
+      exactly. Write tests alongside implementation. Do not skip error
+      handling or input validation.
+    tasks:
+      - summary: "Implement the core API with all endpoints"
+        details: |
+          Write the full Go implementation plan: file-by-file breakdown,
+          implementation order (models → repository → service → handler),
+          test file structure, and a checklist of all endpoints to implement.
+          Reference the architecture and API design docs.
+        deliverables:
+          - "implementation-plan.md"
+        verify: "test -f implementation-plan.md"
+      - summary: "Define the CI/CD pipeline"
+        details: |
+          Write a GitHub Actions workflow spec: lint, test, build, and
+          deploy stages. Include: go vet, staticcheck, race detector in
+          tests, coverage threshold (80%), and Docker image build.
+        deliverables:
+          - "ci-cd.md"
+    depends_on:
+      - architecture
+      - test-plan
+      - security-audit
+
+  # --- Tier 3: Integration (depends on implementation) ---
+  - name: integration
+    lead:
+      role: "Integration Lead"
+    members:
+      - role: "QA Engineer"
+        focus: "end-to-end validation and smoke tests"
+    tasks:
+      - summary: "Produce the final integration and launch checklist"
+        details: |
+          Synthesize all upstream deliverables into a final integration
+          checklist. Include: pre-launch verification steps, smoke test
+          scenarios, rollback plan, monitoring setup (metrics + alerts),
+          and a go/no-go decision matrix. Reference specific deliverables
+          from each upstream team.
+        deliverables:
+          - "integration-checklist.md"
+        verify: "test -f integration-checklist.md"
+    depends_on:
+      - implementation

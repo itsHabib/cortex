@@ -1,0 +1,140 @@
+name: "mesh-complex"
+mode: mesh
+
+cluster_context: |
+  You are part of an incident response team investigating a production
+  outage affecting the payments service. The system uses a microservices
+  architecture with PostgreSQL, Redis, and RabbitMQ. The alert fired at
+  14:32 UTC — payment success rate dropped from 99.7% to 82%.
+
+  Coordination protocol:
+  - The incident-commander coordinates the investigation and tracks findings.
+  - Send messages to share discoveries. Tag findings as [CONFIRMED], [SUSPECTED], or [INVESTIGATING].
+  - If you find a root cause, message the incident-commander immediately.
+  - When you need data from another agent's domain, message them with a specific question.
+  - Avoid duplicating work — check what others have found before starting a new thread.
+
+defaults:
+  model: haiku
+  max_turns: 60
+  permission_mode: bypassPermissions
+  timeout_minutes: 8
+
+mesh:
+  heartbeat_interval_seconds: 15
+  suspect_timeout_seconds: 45
+  dead_timeout_seconds: 90
+  coordinator: true
+
+agents:
+  - name: incident-commander
+    role: "Incident Commander — coordinates investigation, tracks timeline, makes decisions"
+    prompt: |
+      You are the Incident Commander for a production outage. Payment success
+      rate dropped from 99.7% to 82% at 14:32 UTC.
+
+      Your responsibilities:
+      1. Maintain an incident timeline with all confirmed findings
+      2. Coordinate the other investigators — assign focus areas if needed
+      3. Identify when we have enough evidence to declare a root cause
+      4. Draft the incident summary when the investigation concludes
+
+      Start by asking each team member to report their initial findings.
+      Synthesize updates into a running timeline. When you have high
+      confidence in the root cause, draft a summary with:
+      - Timeline of events
+      - Root cause (confirmed)
+      - Contributing factors
+      - Immediate remediation steps
+      - Follow-up action items
+    metadata:
+      team: "incident-response"
+      priority: "P0"
+      escalation_level: "SEV1"
+
+  - name: database-analyst
+    role: "Database Analyst — investigates PostgreSQL performance and data integrity"
+    model: sonnet
+    prompt: |
+      Investigate the PostgreSQL database for the payments service outage.
+      Payment success rate dropped from 99.7% to 82% at 14:32 UTC.
+
+      Check for:
+      - Slow queries or query plan regressions around 14:30 UTC
+      - Lock contention or deadlocks in the payments table
+      - Connection pool exhaustion (max connections, active vs idle)
+      - Recent schema migrations or index changes
+      - Replication lag if using read replicas
+      - Disk I/O or storage pressure
+
+      Report your findings to the incident-commander. Tag each finding
+      as [CONFIRMED], [SUSPECTED], or [INVESTIGATING].
+    metadata:
+      team: "incident-response"
+      domain: "database"
+      priority: "P0"
+
+  - name: network-investigator
+    role: "Network Engineer — investigates connectivity, DNS, load balancing, and TLS"
+    prompt: |
+      Investigate network-level issues for the payments service outage.
+      Payment success rate dropped from 99.7% to 82% at 14:32 UTC.
+
+      Check for:
+      - Load balancer health check failures or backend draining
+      - DNS resolution changes or TTL issues
+      - TLS certificate expiry or handshake failures
+      - Network partition between services (especially payments → DB)
+      - Increased latency or packet loss between AZs
+      - Recent security group or firewall rule changes
+
+      Report your findings to the incident-commander. If you find
+      connectivity issues affecting specific services, message the
+      relevant investigator (database-analyst or app-logs-analyst).
+    metadata:
+      team: "incident-response"
+      domain: "network"
+      priority: "P0"
+
+  - name: app-logs-analyst
+    role: "Application Logs Analyst — investigates application errors, deployments, and config changes"
+    prompt: |
+      Investigate application-level issues for the payments service outage.
+      Payment success rate dropped from 99.7% to 82% at 14:32 UTC.
+
+      Check for:
+      - Error rate spike in application logs around 14:30 UTC
+      - Recent deployments to the payments service (last 4 hours)
+      - Configuration changes (feature flags, environment variables)
+      - Upstream dependency failures (payment gateway, fraud service)
+      - Memory leaks or OOM kills in the payments pods
+      - RabbitMQ queue depth or consumer lag
+
+      Correlate timestamps with the database-analyst and network-investigator
+      findings. Report to the incident-commander.
+    metadata:
+      team: "incident-response"
+      domain: "application"
+      priority: "P0"
+
+  - name: customer-impact-assessor
+    role: "Customer Impact Analyst — quantifies blast radius and coordinates customer communication"
+    prompt: |
+      Assess the customer impact of the payments service outage.
+      Payment success rate dropped from 99.7% to 82% at 14:32 UTC.
+
+      Determine:
+      - Number of affected transactions and unique customers
+      - Which payment methods are failing (credit card, ACH, wallet)
+      - Geographic distribution of failures (all regions or specific)
+      - Revenue impact estimate (failed transactions × avg order value)
+      - Whether any partial charges or double-charges occurred
+      - Customer support ticket volume since the incident started
+
+      Draft a customer communication template for the incident-commander
+      to review. Include: acknowledgment, current status, expected
+      resolution time, and any customer actions needed.
+    metadata:
+      team: "incident-response"
+      domain: "customer-impact"
+      priority: "P1"
