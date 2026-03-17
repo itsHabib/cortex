@@ -1,10 +1,10 @@
 defmodule Cortex.InternalAgent.Debug do
   @moduledoc """
-  Spawns a short-lived `claude -p` agent to produce a root cause analysis
-  for a failed or stalled team.
+  Spawns a short-lived `claude -p` agent to produce a diagnostic report
+  for a team — works on completed, failed, stalled, or running agents.
 
   Pre-reads the team's log file, state.json entry, and diagnostics report,
-  embeds them in the prompt, and gets back a structured RCA. Uses haiku
+  embeds them in the prompt, and gets back a structured analysis. Uses haiku
   with max_turns 1 — no tool calls needed, pure analysis.
 
   ## Usage
@@ -21,7 +21,7 @@ defmodule Cortex.InternalAgent.Debug do
   @max_log_lines 200
 
   @doc """
-  Produces an AI-generated root cause analysis for a specific team.
+  Produces an AI-generated diagnostic report for a specific team.
 
   Reads the team's log file and workspace state, spawns `claude -p`
   with haiku, and returns the RCA text.
@@ -125,10 +125,10 @@ defmodule Cortex.InternalAgent.Debug do
     team_state = extract_team_state(context.state, team_name)
 
     """
-    You are a debug agent performing root cause analysis on a failed agent run.
+    You are a diagnostic agent analyzing an agent's run.
 
     ## Run: #{run_name}
-    ## Failed Team: #{team_name}
+    ## Team: #{team_name}
 
     ## Team State (from state.json)
     ```json
@@ -143,16 +143,19 @@ defmodule Cortex.InternalAgent.Debug do
     #{if context.coordinator_log, do: "## Coordinator Log (last 50 lines)\n```\n#{context.coordinator_log}\n```\n", else: ""}
 
     ## Instructions
-    Analyze the log and state data above to determine why this agent failed.
-    Produce a root cause analysis covering:
+    Analyze the log and state data above. Determine the agent's current state and
+    produce a diagnostic report. Adapt your analysis to what actually happened —
+    the agent may have completed successfully, may still be running, may have failed,
+    or may be stalled.
 
-    1. **What Happened** — describe the failure in plain language
-    2. **Root Cause** — the most likely underlying cause (rate limit, permission error,
-       tool failure, timeout, prompt issue, etc.)
-    3. **Evidence** — specific log lines or state data that support your diagnosis
-    4. **Impact** — what work was lost or incomplete
-    5. **Suggested Fix** — what to change to prevent this failure next time
-       (config change, prompt adjustment, retry strategy, etc.)
+    Structure your report as:
+
+    1. **Status** — current state of the agent (completed, failed, stalled, running, etc.)
+    2. **What Happened** — describe what the agent did in plain language
+    3. **Key Observations** — notable patterns, errors, or successes from the log
+    4. **Evidence** — specific log lines or state data that support your observations
+    5. **Recommendations** — if there were issues, what to change next time;
+       if successful, any optimization opportunities
 
     Be direct and specific. Reference actual log lines and error messages.
     Keep the analysis under 60 lines. Use markdown formatting.

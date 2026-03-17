@@ -595,7 +595,21 @@ defmodule Cortex.Gossip.SessionRunner do
       process_coordinator_outbox(ctx.workspace_path, ctx.agent_names)
     end
 
-    broadcast(:gossip_round_completed, %{round: round, total: config.gossip.rounds})
+    # Collect current knowledge state for UI updates
+    current_entries = collect_all_entries(ctx.stores)
+
+    broadcast(:gossip_round_completed, %{
+      round: round,
+      total: config.gossip.rounds,
+      total_entries: length(current_entries),
+      by_topic: group_entries_by_topic(current_entries),
+      top_entries:
+        current_entries
+        |> Enum.sort_by(& &1.confidence, :desc)
+        |> Enum.take(10)
+        |> Enum.map(&entry_to_map/1)
+    })
+
     persist_gossip_rounds(ctx.run_id, round, config.gossip.rounds)
 
     # Check for early termination from coordinator

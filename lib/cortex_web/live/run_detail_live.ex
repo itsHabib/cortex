@@ -398,10 +398,20 @@ defmodule CortexWeb.RunDetailLive do
   def handle_info(%{type: :gossip_round_completed, payload: payload}, socket) do
     round = Map.get(payload, :round, 0)
     total = Map.get(payload, :total, 0)
+    total_entries = Map.get(payload, :total_entries, 0)
+    by_topic = Map.get(payload, :by_topic, %{})
+    top_entries = Map.get(payload, :top_entries, [])
+
+    knowledge =
+      if total_entries > 0 do
+        %{total_entries: total_entries, by_topic: by_topic, top_entries: top_entries}
+      else
+        socket.assigns.gossip_knowledge
+      end
 
     entry = %{
       team: "system",
-      text: "Gossip round #{round}/#{total} complete — knowledge exchanged",
+      text: "Gossip round #{round}/#{total} complete — #{total_entries} entries exchanged",
       kind: :message,
       at: format_now()
     }
@@ -410,6 +420,7 @@ defmodule CortexWeb.RunDetailLive do
      socket
      |> assign(
        gossip_round: %{current: round, total: total},
+       gossip_knowledge: knowledge,
        activities: prepend_activity(socket.assigns.activities, entry)
      )}
   end
@@ -489,7 +500,7 @@ defmodule CortexWeb.RunDetailLive do
   def handle_info({:debug_report_result, {:ok, report}}, socket) do
     entry = %{
       team: "system",
-      text: "Debug report complete for #{report.team}",
+      text: "Diagnostic report complete for #{report.team}",
       kind: :message,
       at: format_now()
     }
@@ -502,14 +513,14 @@ defmodule CortexWeb.RunDetailLive do
        debug_reports: read_debug_reports(socket.assigns.run),
        activities: prepend_activity(socket.assigns.activities, entry)
      )
-     |> put_flash(:info, "Debug report ready for #{report.team}")}
+     |> put_flash(:info, "Diagnostic report ready for #{report.team}")}
   end
 
   def handle_info({:debug_report_result, {:error, reason}}, socket) do
     {:noreply,
      socket
      |> assign(debug_loading: false)
-     |> put_flash(:error, "Debug report failed: #{inspect(reason)}")}
+     |> put_flash(:error, "Diagnostic report failed: #{inspect(reason)}")}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -773,7 +784,7 @@ defmodule CortexWeb.RunDetailLive do
 
         entry = %{
           team: "system",
-          text: "Debug agent spawned for #{team_name} (haiku)",
+          text: "Diagnostic agent spawned for #{team_name} (haiku)",
           kind: :message,
           at: format_now()
         }
@@ -785,7 +796,7 @@ defmodule CortexWeb.RunDetailLive do
            debug_report: nil,
            activities: prepend_activity(socket.assigns.activities, entry)
          )
-         |> put_flash(:info, "Generating debug report for #{team_name}...")}
+         |> put_flash(:info, "Generating diagnostic report for #{team_name}...")}
     end
   end
 
@@ -829,11 +840,12 @@ defmodule CortexWeb.RunDetailLive do
         {:noreply, put_flash(socket, :error, "No workspace path -- cannot send messages")}
 
       true ->
-        Runner.send_message(workspace_path, "coordinator", to, content)
+        from = if to == "coordinator", do: "human", else: "coordinator"
+        Runner.send_message(workspace_path, from, to, content)
 
         entry = %{
-          team: "coordinator",
-          text: "sent to #{to}: #{truncate(content, 100)}",
+          team: "system",
+          text: "Message sent to #{to}: #{truncate(content, 100)}",
           kind: :message,
           at: format_now()
         }
@@ -1027,11 +1039,13 @@ defmodule CortexWeb.RunDetailLive do
 
     if run && run.workspace_path do
       killed = kill_all_processes(run.workspace_path)
+      coord_killed = stop_coordinator_process(run.id)
+      total_killed = killed + coord_killed
       mark_run_stopped(run)
 
       entry = %{
         team: "system",
-        text: "Run stopped — killed #{killed} process(es)",
+        text: "Run stopped — killed #{total_killed} process(es)",
         kind: :error,
         at: format_now()
       }
@@ -1052,7 +1066,7 @@ defmodule CortexWeb.RunDetailLive do
          pid_status: %{},
          activities: prepend_activity(socket.assigns.activities, entry)
        )
-       |> put_flash(:info, "Run stopped — #{killed} process(es) killed")}
+       |> put_flash(:info, "Run stopped — #{total_killed} process(es) killed")}
     else
       {:noreply, put_flash(socket, :error, "No workspace path")}
     end
@@ -1068,8 +1082,38 @@ defmodule CortexWeb.RunDetailLive do
       gossip?(run) ->
         start_gossip_coordinator(socket, run)
 
+      mesh?(run) ->
+        start_mesh_coordinator(socket, run)
+
       true ->
         start_dag_coordinator(socket, run)
+    end
+  end
+
+  def handle_event("stop_coordinator", _params, socket) do
+    run = socket.assigns.run
+
+    if run do
+      stopped = stop_coordinator_process(run.id)
+      kill_coordinator_os_pid(run.workspace_path)
+      mark_coordinator_stopped(run.id)
+
+      entry = %{
+        team: "system",
+        text: "Coordinator stopped#{if stopped > 0, do: " (process killed)", else: ""}",
+        kind: :message,
+        at: format_now()
+      }
+
+      {:noreply,
+       socket
+       |> assign(
+         coordinator_alive: false,
+         activities: prepend_activity(socket.assigns.activities, entry)
+       )
+       |> put_flash(:info, "Coordinator stopped")}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -1443,6 +1487,13 @@ defmodule CortexWeb.RunDetailLive do
             <p class="text-xs text-gray-500 uppercase">Coordinator</p>
             <%= if @coordinator_alive do %>
               <p class="text-lg font-bold text-green-300">Alive</p>
+              <button
+                :if={@run}
+                phx-click="stop_coordinator"
+                class="mt-1 text-xs text-red-400 hover:text-red-300 underline"
+              >
+                Stop
+              </button>
             <% else %>
               <p class="text-lg font-bold text-gray-500">Dead</p>
               <button
@@ -1836,7 +1887,7 @@ defmodule CortexWeb.RunDetailLive do
               <!-- Team Selector -->
               <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
                 <div class="flex items-center gap-3">
-                  <label class="text-sm text-gray-400 shrink-0">Team:</label>
+                  <label class="text-sm text-gray-400 shrink-0">{String.capitalize(participant_label(@run, :singular))}:</label>
                   <form phx-change="select_messages_team" class="flex-1">
                     <select
                       name="team"
@@ -1891,7 +1942,8 @@ defmodule CortexWeb.RunDetailLive do
                     name="to"
                     class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
                   >
-                    <option value="">Select {participant_label(@run, :singular)}...</option>
+                    <option value="">Select recipient...</option>
+                    <option value="coordinator" selected={@msg_to == "coordinator"}>[coordinator]</option>
                     <option :for={name <- @team_names} value={name} selected={name == @msg_to}>
                       {name}
                     </option>
@@ -2176,7 +2228,7 @@ defmodule CortexWeb.RunDetailLive do
           <!-- Team Selector + Refresh -->
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
             <div class="flex items-center gap-3">
-              <label class="text-sm text-gray-400 shrink-0">Team:</label>
+              <label class="text-sm text-gray-400 shrink-0">{String.capitalize(participant_label(@run, :singular))}:</label>
               <form phx-change="select_diag_team" class="flex-1">
                 <select
                   name="team"
@@ -2222,10 +2274,10 @@ defmodule CortexWeb.RunDetailLive do
               </div>
             </div>
 
-            <!-- AI Debug Report -->
+            <!-- AI Diagnostic Report -->
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
               <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">AI Debug Report</h3>
+                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">AI Diagnostic Report</h3>
                 <button
                   :if={@run && @run.workspace_path}
                   phx-click="request_debug_report"
@@ -2234,11 +2286,11 @@ defmodule CortexWeb.RunDetailLive do
                     "rounded px-4 py-2 text-sm font-medium transition-colors",
                     if(@debug_loading,
                       do: "bg-gray-700 text-gray-400 cursor-wait",
-                      else: "bg-red-600 text-white hover:bg-red-500"
+                      else: "bg-cortex-600 text-white hover:bg-cortex-500"
                     )
                   ]}
                 >
-                  {if @debug_loading, do: "Analyzing...", else: "Generate Debug Report"}
+                  {if @debug_loading, do: "Analyzing...", else: "Generate Diagnostic Report"}
                 </button>
               </div>
               <%= if @debug_report do %>
@@ -2246,7 +2298,7 @@ defmodule CortexWeb.RunDetailLive do
                   <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@debug_report.content}</pre>
                 </div>
               <% else %>
-                <p class="text-gray-500 text-sm">Spawns a haiku agent to analyze the team's log and produce a root cause analysis.</p>
+                <p class="text-gray-500 text-sm">Spawns a haiku agent to analyze this {participant_label(@run, :singular)}'s log and produce a diagnostic report.</p>
               <% end %>
             </div>
 
@@ -2350,11 +2402,11 @@ defmodule CortexWeb.RunDetailLive do
             </div>
           <% end %>
 
-          <!-- Previous Debug Reports -->
+          <!-- Previous Diagnostic Reports -->
           <%= if @debug_reports != [] do %>
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mt-4">
               <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-                Previous Debug Reports
+                Previous Diagnostic Reports
                 <span class="text-xs text-gray-600 normal-case ml-2">({length(@debug_reports)})</span>
               </h3>
               <div class="flex flex-wrap gap-2 mb-3">
@@ -2365,7 +2417,7 @@ defmodule CortexWeb.RunDetailLive do
                   class={[
                     "text-xs px-3 py-1.5 rounded border transition-colors",
                     if(@selected_debug_report && @selected_debug_report.name == file,
-                      do: "border-red-500 text-red-300 bg-red-900/30",
+                      do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
                       else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
                     )
                   ]}
@@ -2559,7 +2611,7 @@ defmodule CortexWeb.RunDetailLive do
             <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
               <div>
                 <dt class="text-xs text-gray-500">{participant_label(@run, :plural)}</dt>
-                <dd class="text-sm text-gray-200">{length(@team_runs)}</dd>
+                <dd class="text-sm text-gray-200">{Enum.count(@team_runs, &(not &1.internal))}</dd>
               </div>
               <div>
                 <dt class="text-xs text-gray-500">{cond do
@@ -2933,6 +2985,67 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  defp start_mesh_coordinator(socket, run) do
+    alias Cortex.Mesh.Config.Loader, as: MeshLoader
+    alias Cortex.Mesh.Coordinator.Prompt, as: MeshCoordPrompt
+
+    case MeshLoader.load_string(run.config_yaml) do
+      {:ok, mesh_config} ->
+        workspace_path = run.workspace_path
+        cortex_path = Path.join(workspace_path, ".cortex")
+        run_id = run.id
+
+        InboxBridge.setup(workspace_path, ["coordinator"])
+
+        # Build roster from team_runs
+        roster =
+          socket.assigns.team_runs
+          |> Enum.reject(& &1.internal)
+          |> Enum.map(fn tr ->
+            %{name: tr.team_name, role: tr.role || tr.team_name, state: tr.status || "running"}
+          end)
+
+        prompt = MeshCoordPrompt.build(mesh_config, workspace_path, roster)
+        log_path = Path.join([cortex_path, "logs", "coordinator.log"])
+
+        callbacks = build_coordinator_callbacks(run_id, cortex_path)
+
+        safe_store_call(fn ->
+          Cortex.Store.upsert_internal_team_run(%{
+            run_id: run_id,
+            team_name: "coordinator",
+            role: "Mesh Coordinator",
+            tier: -1,
+            internal: true,
+            status: "running",
+            prompt: prompt,
+            log_path: log_path,
+            started_at: DateTime.utc_now()
+          })
+        end)
+
+        spawn_coordinator_task(run_id, prompt, log_path, workspace_path, callbacks)
+
+        entry = %{
+          team: "system",
+          text: "Starting mesh coordinator agent...",
+          kind: :resume,
+          at: format_now()
+        }
+
+        {:noreply,
+         socket
+         |> assign(
+           coordinator_alive: true,
+           activities: prepend_activity(socket.assigns.activities, entry)
+         )
+         |> put_flash(:info, "Mesh coordinator agent started")}
+
+      {:error, _errors} ->
+        {:noreply, put_flash(socket, :error, "Failed to parse mesh config")}
+    end
+  end
+
   defp start_dag_coordinator(socket, run) do
     with {:ok, config, _warnings} <- ConfigLoader.load_string(run.config_yaml),
          {:ok, tiers} <- DAG.build_tiers(config.teams) do
@@ -3128,6 +3241,54 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
+  defp stop_coordinator_process(run_id) do
+    case Registry.lookup(Cortex.Orchestration.RunnerRegistry, {:coordinator, run_id}) do
+      [{pid, _}] ->
+        Process.exit(pid, :shutdown)
+        1
+
+      _ ->
+        0
+    end
+  rescue
+    _ -> 0
+  end
+
+  defp kill_coordinator_os_pid(nil), do: :ok
+
+  defp kill_coordinator_os_pid(workspace_path) do
+    pids = coordinator_os_pids(workspace_path)
+    Enum.each(pids, &kill_pid/1)
+  end
+
+  defp coordinator_os_pids(workspace_path) do
+    case read_registry_teams(workspace_path) do
+      {:ok, teams} ->
+        teams
+        |> Enum.filter(fn t -> Map.get(t, "name") == "coordinator" end)
+        |> Enum.map(fn t -> Map.get(t, "pid") end)
+        |> Enum.filter(fn pid -> is_integer(pid) and pid > 0 end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp mark_coordinator_stopped(run_id) do
+    safe_store_call(fn ->
+      run_id
+      |> Cortex.Store.get_team_runs()
+      |> Enum.find(&(&1.team_name == "coordinator" and &1.status == "running"))
+      |> case do
+        %{} = tr ->
+          Cortex.Store.update_team_run(tr, %{status: "stopped", completed_at: DateTime.utc_now()})
+
+        _ ->
+          :ok
+      end
+    end)
+  end
+
   defp mark_run_stopped(run) do
     safe_store_call(fn ->
       # Mark all running team_runs as stopped
@@ -3307,7 +3468,9 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp count_active_running(team_runs, last_seen, pid_status) do
-    Enum.count(team_runs, fn tr ->
+    team_runs
+    |> Enum.reject(& &1.internal)
+    |> Enum.count(fn tr ->
       (tr.status || "pending") == "running" and not team_stalled?(tr, last_seen, pid_status)
     end)
   end
@@ -3717,11 +3880,15 @@ defmodule CortexWeb.RunDetailLive do
   defp run_title(run), do: run.name || "Untitled Run"
 
   defp count_by_status(team_runs, statuses) when is_list(statuses) do
-    Enum.count(team_runs, fn tr -> (tr.status || "pending") in statuses end)
+    team_runs
+    |> Enum.reject(& &1.internal)
+    |> Enum.count(fn tr -> (tr.status || "pending") in statuses end)
   end
 
   defp count_by_status(team_runs, status) do
-    Enum.count(team_runs, fn tr -> (tr.status || "pending") == status end)
+    team_runs
+    |> Enum.reject(& &1.internal)
+    |> Enum.count(fn tr -> (tr.status || "pending") == status end)
   end
 
   defp sum_team_field(team_runs, field) do
