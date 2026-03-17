@@ -9,10 +9,14 @@ mix deps.get && mix ecto.create && mix ecto.migrate && mix test
 - Agent GenServer: lib/cortex/agent/
 - Orchestration: lib/cortex/orchestration/
 - Gossip: lib/cortex/gossip/
+- Mesh: lib/cortex/mesh/
 - Web: lib/cortex_web/
 - Store: lib/cortex/store/
 - Telemetry: lib/cortex/telemetry.ex
 - Performance: lib/cortex/perf/
+
+## Skills
+- `/cortex-config` — interactively create a Cortex YAML config (workflow, mesh, or gossip)
 
 ## Coding Style
 - @moduledoc, @doc, @spec on all public functions

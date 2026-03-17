@@ -101,23 +101,26 @@ mix phx.server
 # http://localhost:4000
 ```
 
+### Create a config
+
+The easiest way to create a config is with the Claude Code skill:
+
+```
+/cortex-config
+```
+
+This walks you through choosing a mode, describing your project, and writes the YAML for you.
+
+Or create configs manually — see [Configuration](#configuration) for the schema.
+
 ### Run an orchestration
 
 ```bash
 # Dry run — show execution plan without spawning agents
-mix run -e 'Cortex.Orchestration.Runner.run("orchestra.yaml", dry_run: true) |> IO.inspect()'
-
-# Full run
-mix run -e 'Cortex.Orchestration.Runner.run("orchestra.yaml") |> IO.inspect()'
-
-# Gossip run
-mix run -e 'Cortex.Gossip.SessionRunner.run("gossip.yaml") |> IO.inspect()'
-
-# Mesh run
-mix cortex.run examples/mesh-simple.yaml
-
-# Mesh dry run
 mix cortex.run examples/mesh-simple.yaml --dry-run
+
+# Run
+mix cortex.run examples/mesh-simple.yaml
 
 # Resume stalled teams in an existing workspace
 mix cortex.resume /path/to/workspace
