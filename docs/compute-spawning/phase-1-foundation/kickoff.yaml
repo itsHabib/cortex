@@ -1,0 +1,227 @@
+phase: "Foundation"
+
+goal: >
+  Define Provider and SpawnBackend behaviours, refactor existing CLI spawning into the new abstractions,
+  update YAML config to support provider/backend selection, and wire the orchestration layer to use
+  the new Provider interface — all without breaking existing functionality.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system that manages teams of AI agents
+  collaborating on complex objectives. It currently spawns agents exclusively as local `claude -p`
+  Erlang port processes. This phase introduces abstraction layers so Cortex can support multiple
+  LLM providers (CLI, HTTP API) and multiple compute backends (local, Docker, Kubernetes).
+
+  ## Current Architecture
+
+  The spawning pipeline today:
+  1. YAML config is loaded by `Cortex.Orchestration.Config.Loader` → produces a `Config` struct
+  2. `Cortex.Orchestration.Runner` coordinates execution (DAG tier walking, parallel team spawning)
+  3. `Cortex.Orchestration.Runner.Executor` is the core execution engine
+  4. `Cortex.Orchestration.Injection` builds the prompt for each team
+  5. `Cortex.Orchestration.Spawner` opens an Erlang port to `claude -p`, pipes the prompt in,
+     reads NDJSON stream-json output, and produces a `TeamResult` struct
+  6. Results flow back through the executor to the runner
+
+  Key existing modules:
+  - `lib/cortex/orchestration/spawner.ex` — spawns `claude -p` via Erlang port, parses NDJSON
+  - `lib/cortex/orchestration/runner.ex` — main orchestration engine
+  - `lib/cortex/orchestration/runner/executor.ex` — DAG execution (tier walking, team spawning)
+  - `lib/cortex/orchestration/injection.ex` — prompt building with upstream results
+  - `lib/cortex/orchestration/config/loader.ex` — YAML parsing into Config structs
+  - `lib/cortex/orchestration/config/validator.ex` — config validation (errors + warnings)
+  - `lib/cortex/orchestration/config/schema.ex` — Config, Defaults, Team, Lead, Member, Task structs
+  - `lib/cortex/orchestration/team_result.ex` — result struct (status, tokens, cost, session_id)
+  - `lib/cortex/orchestration/state.ex` — shared run state (per-team TeamState maps)
+  - `lib/cortex/orchestration/workspace.ex` — .cortex/ directory management
+  - `lib/cortex/orchestration/dag.ex` — DAG engine (Kahn's algorithm for tiers)
+  - `lib/cortex/mesh/` — mesh mode orchestration (MemberList, Detector, Orchestrator)
+  - `lib/cortex/gossip/` — gossip mode (KnowledgeStore, Protocol, Topology)
+  - `lib/cortex/agent/server.ex` — Agent GenServer (state, lifecycle events)
+  - `lib/cortex/agent/supervisor.ex` — DynamicSupervisor for agent processes
+  - `lib/cortex/agent/registry.ex` — Registry wrapper for agent lookup by UUID
+  - `lib/cortex/tool/behaviour.ex` — Tool behaviour (name, description, schema, execute)
+  - `lib/cortex/tool/shell.ex` — Shell tool (allowlisted commands, output truncation)
+  - `lib/cortex/tool/executor.ex` — sandboxed tool execution with crash isolation
+  - `lib/cortex/telemetry.ex` — telemetry event definitions and emission helpers
+  - `lib/cortex_web/live/run_detail_live.ex` — LiveView run detail page
+  - `lib/cortex_web/live/dashboard_live.ex` — LiveView dashboard
+
+  The Spawner module is the critical integration point. It has two main functions:
+  - `spawn/1` — synchronous: opens port, streams output, returns TeamResult
+  - `resume/1` — resumes a session by ID
+
+  Three orchestration modes all ultimately call the Spawner:
+  - DAG mode: Runner.Executor spawns teams in tiers via Spawner
+  - Mesh mode: Mesh.Orchestrator spawns agents via InternalAgent.Launcher (wraps Spawner)
+  - Gossip mode: Gossip.Orchestrator spawns agents via InternalAgent.Launcher
+
+  ## Design Decisions
+
+  ### Provider Behaviour
+  The Provider behaviour abstracts LLM communication. It should define:
+  - `start/1` — initialize provider with config, return handle
+  - `run/3` — execute a prompt with tools, return result stream
+  - `stop/1` — clean up provider resources
+
+  Three implementations planned:
+  - `Provider.CLI` — wraps existing Spawner (this phase)
+  - `Provider.HTTP` — Claude Messages API with agentic loop (Phase 2)
+  - `Provider.External` — delegates to externally registered agents (Cluster Mode feature)
+
+  ### SpawnBackend Behaviour
+  The SpawnBackend behaviour abstracts where agents run:
+  - `spawn/1` — start agent process/container, return handle
+  - `stream/1` — get output stream from agent
+  - `stop/1` — terminate agent
+  - `status/1` — check agent status (:running, :done, :failed)
+
+  Three implementations planned:
+  - `SpawnBackend.Local` — existing Erlang port spawning (this phase)
+  - `SpawnBackend.Docker` — Docker container (Phase 3)
+  - `SpawnBackend.K8s` — Kubernetes Job (Phase 3)
+
+  ### Config Changes
+  The YAML config needs new optional fields:
+  ```yaml
+  defaults:
+    provider: cli          # cli | http (default: cli)
+    backend: local         # local | docker | k8s (default: local)
+
+  teams:
+    - name: architect
+      provider: http       # override per team
+      backend: k8s         # override per team
+  ```
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+  - Run `mix format` before committing
+  - Run `mix compile --warnings-as-errors`
+  - Run `mix credo --strict`
+
+dependencies:
+  - docs/compute-spawning/PROJECT.md
+
+plans_dir: docs/compute-spawning/phase-1-foundation/plans
+content_dir: docs/compute-spawning/phase-1-foundation/content
+
+teammates:
+  - role: "Behaviour Architect"
+    doc: behaviour-architect.md
+    focus: |
+      Define the Provider and SpawnBackend behaviours that all implementations will follow.
+
+      Files to create:
+      - `lib/cortex/provider.ex` — Provider behaviour module
+        - Callbacks: `start(config) :: {:ok, handle}`, `run(handle, prompt, opts) :: {:ok, result}`,
+          `stop(handle) :: :ok`
+        - The `result` type should be compatible with the existing TeamResult struct
+        - Include a `stream/3` callback variant that returns a stream of events for real-time updates
+        - Define types for provider config, handle, and events
+      - `lib/cortex/spawn_backend.ex` — SpawnBackend behaviour module
+        - Callbacks: `spawn(config) :: {:ok, handle}`, `stream(handle) :: {:ok, Enumerable.t()}`,
+          `stop(handle) :: :ok`, `status(handle) :: :running | :done | :failed`
+        - The handle should be opaque — each backend defines its own
+        - Define types for backend config and handle
+      - `test/cortex/provider_test.exs` — tests for the behaviour contracts
+      - `test/cortex/spawn_backend_test.exs` — tests for the behaviour contracts
+
+      Design considerations:
+      - Keep behaviours minimal — only what every implementation must support
+      - The Provider behaviour is about LLM communication (what to say)
+      - The SpawnBackend behaviour is about compute (where to run)
+      - These two are composed: Provider.CLI uses SpawnBackend.Local,
+        Provider.HTTP manages its own HTTP connections,
+        remote backends (Docker, K8s) can use either provider inside the container
+
+  - role: "CLI Refactor Engineer"
+    doc: cli-refactor.md
+    focus: |
+      Wrap the existing Spawner into the new Provider.CLI and SpawnBackend.Local implementations
+      without breaking any existing functionality.
+
+      Files to create:
+      - `lib/cortex/provider/cli.ex` — Provider.CLI implementation
+        - Implements the Provider behaviour
+        - Delegates to SpawnBackend.Local for process management
+        - Wraps the existing Spawner.spawn/1 and Spawner.resume/1 logic
+        - Translates Spawner's NDJSON parsing into the Provider event stream format
+      - `lib/cortex/spawn_backend/local.ex` — SpawnBackend.Local implementation
+        - Implements the SpawnBackend behaviour
+        - Extracts the Erlang port management from the existing Spawner
+        - Port opening, stdin writing, stdout reading, process monitoring
+        - Handles port cleanup on stop
+      - `test/cortex/provider/cli_test.exs` — tests for Provider.CLI
+      - `test/cortex/spawn_backend/local_test.exs` — tests for SpawnBackend.Local
+
+      Critical constraints:
+      - The existing Spawner module (`lib/cortex/orchestration/spawner.ex`) must continue to work
+        during the transition. Either keep it as a thin wrapper around Provider.CLI, or update all
+        callers in one go. Recommend: keep Spawner as a facade that delegates to Provider.CLI,
+        so existing code doesn't break.
+      - All existing Spawner tests must continue to pass
+      - The NDJSON parsing logic should stay in Provider.CLI (it's Claude CLI-specific)
+
+  - role: "Config Engineer"
+    doc: config-engineer.md
+    focus: |
+      Update the YAML config system to support provider and backend selection.
+
+      Files to modify:
+      - `lib/cortex/orchestration/config/schema.ex` — add fields to Defaults and Team structs
+        - Defaults: add `provider` (atom, default :cli) and `backend` (atom, default :local)
+        - Team: add optional `provider` and `backend` fields that override defaults
+        - Lead: consider if provider/backend should be at lead level too
+      - `lib/cortex/orchestration/config/loader.ex` — parse new fields from YAML
+        - Handle string-to-atom conversion for provider/backend values
+        - Apply defaults when fields are omitted
+      - `lib/cortex/orchestration/config/validator.ex` — validate new fields
+        - provider must be one of: :cli, :http, :external
+        - backend must be one of: :local, :docker, :k8s
+        - Warn if backend is :docker or :k8s but provider is :cli (CLI needs to be in the container)
+        - Error if provider is :external (not implemented yet, Cluster Mode feature)
+
+      Files for tests:
+      - Update `test/cortex/orchestration/config/loader_test.exs`
+      - Update `test/cortex/orchestration/config/validator_test.exs`
+
+      Also update the mesh and gossip config loaders if they have their own schema:
+      - `lib/cortex/mesh/config/loader.ex`
+      - `lib/cortex/gossip/config/loader.ex`
+
+  - role: "Integration Engineer"
+    doc: integration-engineer.md
+    focus: |
+      Wire the orchestration layer to use the new Provider abstraction instead of calling
+      Spawner directly. This is the glue that makes everything work together.
+
+      Files to modify:
+      - `lib/cortex/orchestration/runner/executor.ex` — the core execution engine
+        - Instead of calling Spawner.spawn/1 directly, resolve the provider from config
+          and call Provider.run/3
+        - Pass provider and backend config from the Team struct
+        - Ensure TeamResult compatibility — the executor expects TeamResult structs
+      - `lib/cortex/orchestration/runner.ex` — may need updates to pass provider config through
+      - `lib/cortex/internal_agent/launcher.ex` — used by mesh and gossip orchestrators
+        - Update to use Provider abstraction instead of direct Spawner calls
+
+      Files to create:
+      - `lib/cortex/provider/resolver.ex` — resolves provider module from config
+        - Given a Team struct with provider/backend fields, returns the appropriate
+          Provider implementation module
+        - Handles default resolution (no provider field → Provider.CLI)
+        - Validates that the provider module is available
+
+      Files for tests:
+      - `test/cortex/provider/resolver_test.exs`
+      - Update integration tests to verify the full flow still works
+
+      Critical constraint: this is the riskiest part of the refactor. Every orchestration mode
+      (DAG, mesh, gossip) flows through the spawner. Changes here must be backward-compatible.
+      Run the full test suite frequently.

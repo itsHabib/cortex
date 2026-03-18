@@ -1,0 +1,276 @@
+phase: "Sidecar"
+
+goal: >
+  Build the sidecar — a lightweight binary that runs alongside agents in any environment,
+  connects to the Cortex gateway via WebSocket, and exposes a local HTTP API that agents
+  call to interact with the mesh (query peers, send messages, pull knowledge, report status).
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 built the gateway —
+  the WebSocket channel and registry where agents connect. This phase builds the other side:
+  the sidecar that runs next to the agent and bridges it to Cortex.
+
+  ## Sidecar Architecture
+
+  ```
+  ┌─── Container / Machine ────────────────┐
+  │                                         │
+  │  ┌──────────┐      ┌───────────────┐   │
+  │  │  Agent    │──────│   Sidecar     │───┼──── WebSocket ──→ Cortex Gateway
+  │  │  (LLM)   │ HTTP │   (binary)    │   │
+  │  │          │:9090 │               │   │
+  │  └──────────┘      └───────────────┘   │
+  │                                         │
+  └─────────────────────────────────────────┘
+  ```
+
+  The sidecar has two interfaces:
+  1. **Outward** (WebSocket to Cortex) — registration, heartbeats, task results, status
+  2. **Inward** (HTTP to the agent) — the agent calls localhost:9090 to interact with the mesh
+
+  ## Sidecar Local HTTP API
+
+  The agent gets a tool (e.g., `cortex_query`) that hits localhost:9090. Endpoints:
+
+  ### Mesh Queries
+  - `GET /health` — sidecar health check
+  - `GET /roster` — list all agents in the mesh with capabilities and status
+  - `GET /roster/:agent_id` — get details for a specific agent
+  - `GET /roster/capable/:capability` — find agents with a given capability
+
+  ### Messaging
+  - `GET /messages` — get pending messages for this agent
+  - `POST /messages/:agent_id` — send a message to another agent
+  - `POST /broadcast` — broadcast a message to all agents
+
+  ### Agent-to-Agent Invocation
+  - `POST /ask/:agent_id` — invoke another agent synchronously (blocks until response)
+    Request: `{"prompt": "Review this code...", "timeout_ms": 60000}`
+    Response: `{"status": "completed", "result": "..."}`
+  - `POST /ask/capable/:capability` — invoke by capability (Cortex picks the best agent)
+
+  ### Knowledge (Gossip Integration)
+  - `GET /knowledge?topic=X` — query the knowledge store
+  - `POST /knowledge` — publish a knowledge entry
+    Request: `{"topic": "findings", "content": "Found SQL injection in...", "confidence": 0.9}`
+
+  ### Status
+  - `POST /status` — report progress to Cortex
+    Request: `{"status": "working", "detail": "Analyzing file 3/7", "progress": 0.43}`
+
+  ### Task Management
+  - `GET /task` — get current task assignment (if any)
+  - `POST /task/result` — submit task result
+
+  ## Sidecar WebSocket Protocol
+
+  The sidecar speaks the same protocol defined in Phase 1:
+  - On startup: connect to Cortex gateway, send `register` message
+  - Periodically: send `heartbeat` messages
+  - On task completion: send `task_result`
+  - On status change: send `status_update`
+  - Receive: `task_request`, `peer_request`, `registered`
+
+  ## Sidecar Configuration
+
+  Via environment variables:
+  - `CORTEX_GATEWAY_URL` — WebSocket URL (e.g., ws://cortex:4000/agent/websocket)
+  - `CORTEX_AGENT_NAME` — agent name for registration
+  - `CORTEX_AGENT_ROLE` — agent role description
+  - `CORTEX_AGENT_CAPABILITIES` — comma-separated capabilities
+  - `CORTEX_AUTH_TOKEN` — bearer token for gateway auth
+  - `CORTEX_SIDECAR_PORT` — local HTTP port (default: 9090)
+  - `CORTEX_HEARTBEAT_INTERVAL` — heartbeat interval in seconds (default: 15)
+
+  ## Implementation Language Decision
+
+  The sidecar should be an Elixir escript (single binary via `mix escript.build`).
+  Reasons:
+  - Same language as Cortex — shared protocol modules, less code duplication
+  - OTP gives us WebSocket client (via `websocket_client` or `Mint.WebSocket`),
+    HTTP server (via `Bandit` or `Plug.Cowboy`), and supervision for free
+  - Escript produces a single executable (requires Erlang runtime on the host)
+  - Alternative: if zero-dependency is critical, consider Go (single static binary)
+
+  For this phase, build it as an Elixir escript within the Cortex project. It can be
+  extracted to a separate repo later if needed.
+
+  ## Existing Cortex Infrastructure (from Phase 1)
+
+  - `lib/cortex_web/channels/agent_socket.ex` — Phoenix Socket for agents
+  - `lib/cortex_web/channels/agent_channel.ex` — Phoenix Channel handling registration
+  - `lib/cortex/gateway/registry.ex` — tracks connected agents
+  - `lib/cortex/gateway/registered_agent.ex` — agent struct
+  - `lib/cortex/gateway/protocol.ex` — message parsing and validation
+  - `lib/cortex/gateway/protocol/messages.ex` — message structs
+  - `lib/cortex/gateway/auth.ex` — token authentication
+  - `lib/cortex/gateway/health.ex` — health monitoring
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+
+dependencies:
+  - docs/cluster-mode/PROJECT.md
+  - docs/cluster-mode/phase-1-agent-gateway/kickoff.yaml
+
+plans_dir: docs/cluster-mode/phase-2-sidecar/plans
+content_dir: docs/cluster-mode/phase-2-sidecar/content
+
+teammates:
+  - role: "Sidecar Core Engineer"
+    doc: sidecar-core.md
+    focus: |
+      Build the sidecar's core — the main process, configuration, and WebSocket connection
+      to the Cortex gateway.
+
+      Files to create:
+      - `lib/cortex/sidecar/application.ex` — sidecar OTP application
+        - Supervision tree: WebSocket client, HTTP server, state manager
+        - Read config from environment variables
+        - Graceful shutdown handling
+      - `lib/cortex/sidecar/config.ex` — sidecar configuration
+        - Parse environment variables into config struct
+        - Validate required fields (gateway URL, agent name)
+        - Defaults for optional fields (port, heartbeat interval)
+      - `lib/cortex/sidecar/connection.ex` — WebSocket client GenServer
+        - Connect to Cortex gateway on startup
+        - Send registration message on connect
+        - Send periodic heartbeats
+        - Handle incoming messages (task_request, peer_request)
+        - Auto-reconnect on disconnect with exponential backoff
+        - Parse messages using shared Gateway.Protocol modules
+      - `lib/cortex/sidecar/state.ex` — sidecar state manager GenServer
+        - Track current task assignment
+        - Track connection status (connected/disconnected/reconnecting)
+        - Cache mesh roster (updated via gateway pushes)
+        - Store pending messages
+      - `test/cortex/sidecar/connection_test.exs`
+      - `test/cortex/sidecar/config_test.exs`
+
+      Design notes:
+      - The sidecar must be resilient — if Cortex goes down, the sidecar reconnects
+        automatically. The agent should keep working; it just can't query the mesh.
+      - Use Mint.WebSocket or :gun for the WebSocket client (not Phoenix client-side JS)
+      - Share protocol modules with the gateway — import from cortex/gateway/protocol
+
+  - role: "Sidecar HTTP API Engineer"
+    doc: sidecar-http-api.md
+    focus: |
+      Build the local HTTP API that agents call to interact with the mesh.
+
+      Files to create:
+      - `lib/cortex/sidecar/router.ex` — Plug router for the local HTTP API
+        - Mount all endpoint handlers
+        - JSON request/response format
+        - Error handling middleware
+        - CORS headers (allow localhost)
+      - `lib/cortex/sidecar/handlers/roster.ex` — mesh roster endpoints
+        - `GET /roster` — list all agents (from cached state)
+        - `GET /roster/:agent_id` — agent details
+        - `GET /roster/capable/:capability` — find by capability
+        - If roster cache is stale, request refresh from Cortex
+      - `lib/cortex/sidecar/handlers/messages.ex` — messaging endpoints
+        - `GET /messages` — get pending messages
+        - `POST /messages/:agent_id` — send message (routed via Cortex)
+        - `POST /broadcast` — broadcast to all agents
+      - `lib/cortex/sidecar/handlers/invoke.ex` — agent-to-agent invocation
+        - `POST /ask/:agent_id` — synchronous invocation
+        - `POST /ask/capable/:capability` — invoke by capability
+        - Blocks until response or timeout
+        - Returns structured result
+      - `lib/cortex/sidecar/handlers/knowledge.ex` — knowledge store endpoints
+        - `GET /knowledge` — query knowledge
+        - `POST /knowledge` — publish knowledge entry
+      - `lib/cortex/sidecar/handlers/status.ex` — status reporting
+        - `POST /status` — report progress to Cortex
+        - `GET /task` — get current task assignment
+        - `POST /task/result` — submit task result
+      - `lib/cortex/sidecar/handlers/health.ex` — health check
+        - `GET /health` — sidecar health (connected to Cortex? agent alive?)
+      - `test/cortex/sidecar/router_test.exs`
+      - `test/cortex/sidecar/handlers/*_test.exs`
+
+      Design notes:
+      - Use Bandit or Plug.Cowboy for the HTTP server
+      - All endpoints return JSON with consistent error format:
+        `{"error": "agent not found", "code": "NOT_FOUND"}`
+      - The /ask endpoints are the most complex — they send a peer_request via
+        the WebSocket, wait for a response, and return it. Use GenServer.call
+        with a timeout for the blocking behavior.
+      - Keep the API simple and RESTful — an LLM agent needs to understand it
+
+  - role: "Sidecar Packaging Engineer"
+    doc: sidecar-packaging.md
+    focus: |
+      Package the sidecar as a distributable binary and create tooling for running it.
+
+      Files to create:
+      - `lib/cortex/sidecar/cli.ex` — CLI entrypoint for escript
+        - Parse command-line arguments
+        - Print help/usage
+        - Start the sidecar application
+        - Handle --version, --help flags
+      - `mix.exs` updates — add escript configuration
+        - `escript: [main_module: Cortex.Sidecar.CLI]`
+        - Or consider a separate Mix project under `sidecar/` directory
+      - `infra/docker/sidecar.Dockerfile` — Dockerfile for sidecar
+        - Build the escript
+        - Minimal runtime image with Erlang
+        - Used when baking sidecar into agent containers
+      - `scripts/run-sidecar.sh` — convenience script for running locally
+        - Sets default environment variables
+        - Runs the escript
+        - Usage examples in comments
+      - `docs/cluster-mode/SIDECAR_GUIDE.md` — usage guide
+        - How to configure and run the sidecar
+        - Environment variable reference
+        - Example: running alongside a local agent
+        - Example: baking into a Docker container
+        - Example: deploying as a k8s sidecar container
+
+      Design notes:
+      - The escript should start cleanly with just CORTEX_GATEWAY_URL and
+        CORTEX_AGENT_NAME set — everything else has sensible defaults
+      - Consider whether to make this a separate Mix project (sidecar/) or
+        keep it in the main Cortex project. Recommendation: keep in main project
+        for now, share protocol modules; extract later if needed.
+      - The Dockerfile should produce a small image — just Erlang runtime + escript
+
+  - role: "Integration Test Engineer"
+    doc: integration-test.md
+    focus: |
+      Build end-to-end integration tests that verify the full sidecar ↔ gateway flow.
+
+      Files to create:
+      - `test/cortex/sidecar/integration_test.exs` — full flow integration tests
+        - Test: sidecar connects → registers → appears in gateway registry
+        - Test: sidecar sends heartbeats → gateway health monitor sees them
+        - Test: sidecar disconnects → gateway marks agent as disconnected
+        - Test: sidecar reconnects after disconnect → agent re-registered
+        - Test: agent calls GET /roster → sees other registered agents
+        - Test: agent calls POST /status → Cortex receives status update
+        - Test: agent calls POST /messages/:id → message routed to target
+        - Test: Cortex sends task_request → sidecar receives it
+        - Test: sidecar sends task_result → Cortex receives it
+      - `test/cortex/sidecar/invoke_test.exs` — agent-to-agent invocation tests
+        - Test: agent A calls POST /ask/:agent_b → request routed, response returned
+        - Test: invocation timeout → returns timeout error
+        - Test: target agent not found → returns not found error
+        - Test: invoke by capability → routed to capable agent
+      - `test/support/sidecar_helpers.ex` — test helpers
+        - Helper to start a test sidecar connected to the test gateway
+        - Helper to simulate agent responses
+        - Helper to assert gateway events
+
+      Design notes:
+      - These tests start both the Cortex gateway (Phoenix endpoint) and a sidecar
+        instance in the test process
+      - Use async: false for integration tests (shared state)
+      - Test the reconnection logic with simulated connection drops
+      - Verify telemetry events are emitted at each step

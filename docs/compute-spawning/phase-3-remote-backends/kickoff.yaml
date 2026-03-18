@@ -1,0 +1,295 @@
+phase: "Remote Backends"
+
+goal: >
+  Implement SpawnBackend.Docker and SpawnBackend.K8s so Cortex can spawn agents in Docker
+  containers and as Kubernetes Jobs, with output streaming, status tracking, and dashboard
+  integration for remote agents.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 introduced Provider and
+  SpawnBackend behaviours. Phase 2 added Provider.HTTP for direct Claude API integration.
+  This phase adds remote compute backends — Docker containers and Kubernetes Jobs — so agents
+  can run on infrastructure beyond the local machine.
+
+  ## Architecture
+
+  The SpawnBackend behaviour (from Phase 1):
+  ```elixir
+  @callback spawn(config) :: {:ok, handle}
+  @callback stream(handle) :: {:ok, Enumerable.t()}
+  @callback stop(handle) :: :ok
+  @callback status(handle) :: :running | :done | :failed
+  ```
+
+  SpawnBackend.Local (from Phase 1) opens an Erlang port to a local process. The remote
+  backends do the equivalent but on remote compute:
+
+  - **Docker**: Create and start a container via Docker Engine API, stream logs
+  - **K8s**: Create a Job via Kubernetes API, stream pod logs
+
+  Both backends need to:
+  1. Package the agent's prompt and config into the container/pod
+  2. Start the container/pod
+  3. Stream stdout back to Cortex for real-time updates
+  4. Report status (running/done/failed)
+  5. Clean up on stop or completion
+
+  ## Container Design
+
+  The agent container runs:
+  - An LLM provider process (e.g., `claude -p` for CLI mode, or a small script that
+    calls the Claude API for HTTP mode)
+  - Output goes to stdout in the same NDJSON format Cortex already parses
+
+  For CLI mode: the container has `claude` CLI installed, runs `claude -p` with the prompt
+  For HTTP mode: the container runs a small Elixir/Python/Go script that calls the API
+
+  Environment variables passed to the container:
+  - ANTHROPIC_API_KEY — for API access
+  - CORTEX_PROMPT — the agent's prompt (or mounted as a file)
+  - CORTEX_MODEL — model to use
+  - CORTEX_MAX_TURNS — turn limit
+  - CORTEX_OUTPUT_FORMAT — "stream-json" for NDJSON output
+
+  ## Docker Engine API
+
+  Docker Engine exposes a REST API over a Unix socket (/var/run/docker.sock).
+  Key endpoints:
+  - POST /containers/create — create a container
+  - POST /containers/{id}/start — start it
+  - GET /containers/{id}/logs?follow=true&stdout=true — stream logs
+  - GET /containers/{id}/json — inspect container (status, exit code)
+  - POST /containers/{id}/stop — stop container
+  - DELETE /containers/{id} — remove container
+
+  In Elixir, you can call these via Req with a Unix socket adapter, or use
+  `System.cmd("docker", ...)` as a simpler alternative.
+
+  ## Kubernetes API
+
+  The `k8s` Elixir library provides a client for the Kubernetes API.
+  Key operations:
+  - Create a Job resource (spawns a pod)
+  - Watch pod status (Pending → Running → Succeeded/Failed)
+  - Stream pod logs
+  - Delete Job on cleanup
+
+  A Kubernetes Job spec for an agent:
+  ```yaml
+  apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: cortex-agent-{run_id}-{team_name}
+    labels:
+      cortex.run: {run_id}
+      cortex.team: {team_name}
+  spec:
+    backoffLimit: 0
+    ttlSecondsAfterFinished: 300
+    template:
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: agent
+            image: cortex-agent:latest
+            env:
+              - name: ANTHROPIC_API_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: cortex-secrets
+                    key: anthropic-api-key
+              - name: CORTEX_PROMPT
+                value: "{prompt}"
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+  ```
+
+  ## Existing Modules (from Phases 1-2)
+
+  - `lib/cortex/provider.ex` — Provider behaviour
+  - `lib/cortex/spawn_backend.ex` — SpawnBackend behaviour
+  - `lib/cortex/provider/cli.ex` — CLI provider
+  - `lib/cortex/provider/http.ex` — HTTP provider
+  - `lib/cortex/spawn_backend/local.ex` — Local backend (reference implementation)
+  - `lib/cortex/provider/resolver.ex` — resolves provider/backend from config
+  - `lib/cortex/orchestration/team_result.ex` — TeamResult struct
+  - `lib/cortex/telemetry.ex` — telemetry events
+  - `lib/cortex_web/live/run_detail_live.ex` — run detail LiveView
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+
+dependencies:
+  - docs/compute-spawning/PROJECT.md
+  - docs/compute-spawning/phase-1-foundation/kickoff.yaml
+  - docs/compute-spawning/phase-2-http-provider/kickoff.yaml
+
+plans_dir: docs/compute-spawning/phase-3-remote-backends/plans
+content_dir: docs/compute-spawning/phase-3-remote-backends/content
+
+teammates:
+  - role: "Container Spec Engineer"
+    doc: container-spec.md
+    focus: |
+      Design and build the agent container image — the Dockerfile and entrypoint that
+      packages an agent for remote execution.
+
+      Files to create:
+      - `infra/docker/agent.Dockerfile` — multi-stage Dockerfile for agent containers
+        - Base image with Claude CLI installed (for CLI mode)
+        - Also supports HTTP mode (small Elixir escript or shell script that runs the
+          agentic loop and outputs NDJSON to stdout)
+        - Reads config from environment variables (CORTEX_PROMPT, CORTEX_MODEL, etc.)
+        - Outputs NDJSON stream-json to stdout (same format as `claude -p --output-format stream-json`)
+        - Small image size — minimal dependencies
+      - `infra/docker/entrypoint.sh` — container entrypoint
+        - Reads CORTEX_PROVIDER env var to decide CLI vs HTTP mode
+        - For CLI: runs `claude -p --model $CORTEX_MODEL --output-format stream-json --max-turns $CORTEX_MAX_TURNS`
+        - For HTTP: runs the HTTP agentic loop script
+        - Pipes prompt from CORTEX_PROMPT env var or mounted file
+        - Handles graceful shutdown on SIGTERM
+      - `infra/docker/build.sh` — build script for the agent image
+      - `infra/docker/README.md` — documentation on building and configuring the agent image
+
+      Design considerations:
+      - The same container image should work for both Docker and K8s backends
+      - Keep the image small — the agent doesn't need a full dev environment
+      - The NDJSON output format must match what Cortex already parses in Provider.CLI
+      - Consider how secrets (API keys) get into the container — env vars for Docker,
+        k8s Secrets for K8s
+
+  - role: "Docker Backend Engineer"
+    doc: docker-backend.md
+    focus: |
+      Implement SpawnBackend.Docker — spawn and manage agent containers via the Docker Engine API.
+
+      Files to create:
+      - `lib/cortex/spawn_backend/docker.ex` — SpawnBackend.Docker implementation
+        - `spawn/1` — create and start a container with the agent image
+          - Build container config from team/prompt config
+          - Set environment variables (CORTEX_PROMPT, CORTEX_MODEL, etc.)
+          - Optionally mount volumes for workspace/artifacts
+          - Return handle with container ID
+        - `stream/1` — stream container logs (stdout) in real-time
+          - Use Docker logs endpoint with follow=true
+          - Parse NDJSON lines as they arrive
+          - Return an Elixir Stream/Enumerable
+        - `stop/1` — stop and remove the container
+          - Graceful stop with timeout, then kill
+          - Remove container after stop
+        - `status/1` — check container status
+          - Inspect container state (running, exited)
+          - Map exit code to :done (0) or :failed (non-zero)
+      - `lib/cortex/spawn_backend/docker/client.ex` — Docker Engine API client
+        - HTTP calls to Docker socket (/var/run/docker.sock)
+        - Container CRUD operations
+        - Log streaming
+        - Image management (pull if not present)
+      - `test/cortex/spawn_backend/docker_test.exs`
+      - `test/cortex/spawn_backend/docker/client_test.exs`
+
+      Design notes:
+      - Use Req with a Unix socket adapter for Docker API calls, or fall back to
+        `System.cmd("docker", ...)` for simplicity
+      - Container names should be deterministic: "cortex-{run_id}-{team_name}"
+      - Clean up containers on stop AND on Cortex shutdown (trap exits)
+      - Consider a container pool for faster startup (pre-pulled images)
+
+  - role: "K8s Backend Engineer"
+    doc: k8s-backend.md
+    focus: |
+      Implement SpawnBackend.K8s — spawn agents as Kubernetes Jobs and stream pod logs.
+
+      Files to create:
+      - `lib/cortex/spawn_backend/k8s.ex` — SpawnBackend.K8s implementation
+        - `spawn/1` — create a k8s Job resource
+          - Build Job spec from team/prompt config
+          - Set pod env vars, resource limits, labels
+          - Use CORTEX_PROMPT as env var (short prompts) or ConfigMap (long prompts)
+          - API key via k8s Secret reference
+          - Return handle with job name and namespace
+        - `stream/1` — stream pod logs in real-time
+          - Wait for pod to reach Running state
+          - Stream logs from the pod's agent container
+          - Parse NDJSON lines as they arrive
+        - `stop/1` — delete the Job (cascading delete removes pod)
+        - `status/1` — check Job/pod status
+          - Map k8s statuses: Pending → :running, Running → :running,
+            Succeeded → :done, Failed → :failed
+      - `lib/cortex/spawn_backend/k8s/client.ex` — Kubernetes API client wrapper
+        - Wraps the `k8s` Elixir library
+        - Job CRUD operations
+        - Pod log streaming
+        - Status watching
+        - Namespace and context configuration
+      - `lib/cortex/spawn_backend/k8s/job_spec.ex` — Job manifest builder
+        - Builds the k8s Job YAML/map from Cortex config
+        - Configurable resource limits, node selectors, tolerations
+        - Labels for Cortex run/team identification
+        - TTL for automatic cleanup after completion
+      - `test/cortex/spawn_backend/k8s_test.exs`
+      - `test/cortex/spawn_backend/k8s/job_spec_test.exs`
+
+      Dependencies to add to mix.exs:
+      - `{:k8s, "~> 2.0"}` — Kubernetes API client
+
+      Design notes:
+      - The k8s backend is the most exciting for production use — imagine a DAG run where
+        each tier spawns a batch of k8s Jobs, they run in parallel, and results flow to
+        the next tier. This is basically a lightweight Argo Workflows for AI agents.
+      - Support configurable namespace (default: "cortex")
+      - Support configurable kubeconfig path or in-cluster auth
+      - Long prompts should use ConfigMaps (env vars have a 1MB limit in k8s but
+        individual env vars are limited to ~32KB depending on the runtime)
+      - Consider pod affinity — keep agents from the same run on the same node if possible
+
+  - role: "Streaming & Dashboard Engineer"
+    doc: streaming-dashboard.md
+    focus: |
+      Build unified output streaming from remote backends and update the LiveView dashboard
+      to show remote agent status.
+
+      Files to create:
+      - `lib/cortex/spawn_backend/stream_adapter.ex` — unified stream adapter
+        - Normalizes output streams from different backends into a common event format
+        - Handles connection drops and reconnection for remote streams
+        - Buffers events and emits via PubSub for LiveView consumption
+        - Parses NDJSON from raw log streams (shared logic for Docker and K8s)
+      - `lib/cortex/spawn_backend/health.ex` — remote agent health tracking
+        - Periodic status checks for remote agents (container/pod status)
+        - Detect stalled agents (no output for configurable duration)
+        - Emit telemetry events for health state changes
+        - Integrate with existing mesh Detector pattern if applicable
+
+      Files to modify:
+      - `lib/cortex_web/live/run_detail_live.ex` — update to show remote agent info
+        - Display backend type (local/docker/k8s) per team
+        - Show container/pod ID for remote agents
+        - Show remote agent health status
+        - Add visual indicator for remote vs local agents
+      - `lib/cortex_web/components/core_components.ex` — add components for backend status
+        - Backend badge component (local/docker/k8s with appropriate styling)
+        - Remote agent status indicator
+
+      Files for tests:
+      - `test/cortex/spawn_backend/stream_adapter_test.exs`
+      - `test/cortex/spawn_backend/health_test.exs`
+
+      Design notes:
+      - The stream adapter should handle the fact that remote streams can drop and reconnect
+        (network issues, container restart). Buffer the last known state so the dashboard
+        doesn't flicker.
+      - PubSub events should be compatible with existing LiveView subscriptions —
+        the dashboard shouldn't need to know whether an agent is local or remote.
+      - Health checks should be lightweight — a simple status API call, not log parsing.

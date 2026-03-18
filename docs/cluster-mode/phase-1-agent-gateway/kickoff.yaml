@@ -1,0 +1,308 @@
+phase: "Agent Gateway"
+
+goal: >
+  Build a Phoenix WebSocket gateway where agents connect and register, a registry that tracks
+  connected agents with their capabilities and health, and define the registration protocol
+  that the sidecar (Phase 2) will speak.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. The Cluster Mode feature turns
+  Cortex from a job scheduler into a control plane for an agent mesh. This phase builds the
+  Cortex-side infrastructure: the WebSocket gateway agents connect to, the registry that
+  tracks them, and the protocol they speak.
+
+  ## Architecture
+
+  ```
+  ┌─────────────────────────────────────────┐
+  │              Cortex                      │
+  │                                          │
+  │  ┌──────────────┐  ┌─────────────────┐  │
+  │  │  Agent        │  │  Gateway        │  │
+  │  │  Gateway      │←→│  Registry       │  │
+  │  │  (Phoenix     │  │  (GenServer)    │  │
+  │  │   Channel)    │  │                 │  │
+  │  └──────┬───────┘  └─────────────────┘  │
+  │         │ WebSocket                      │
+  └─────────┼────────────────────────────────┘
+            │
+  ┌─────────┼─────────┐  ┌──────────────────┐
+  │  Agent + Sidecar  │  │  Agent + Sidecar  │
+  │  (anywhere)       │  │  (anywhere)       │
+  └───────────────────┘  └──────────────────┘
+  ```
+
+  ## Registration Protocol
+
+  The protocol is JSON-over-WebSocket. All messages have a `type` field.
+
+  ### Agent → Cortex messages:
+
+  **register** — agent announces itself
+  ```json
+  {
+    "type": "register",
+    "protocol_version": 1,
+    "agent": {
+      "name": "security-reviewer",
+      "role": "Reviews code for security vulnerabilities",
+      "capabilities": ["security-review", "threat-modeling", "cve-lookup"],
+      "metadata": {
+        "model": "opus",
+        "provider": "claude",
+        "max_concurrent": 3
+      }
+    },
+    "auth": {
+      "token": "bearer-token-here"
+    }
+  }
+  ```
+
+  **heartbeat** — agent is alive (sent periodically by sidecar)
+  ```json
+  {
+    "type": "heartbeat",
+    "agent_id": "agent-uuid",
+    "status": "idle",
+    "load": {
+      "active_tasks": 1,
+      "queue_depth": 0
+    }
+  }
+  ```
+
+  **task_result** — agent completed a task
+  ```json
+  {
+    "type": "task_result",
+    "task_id": "task-uuid",
+    "status": "completed",
+    "result": {
+      "text": "Review complete. Found 3 issues...",
+      "tokens": {"input": 1500, "output": 800},
+      "duration_ms": 12000
+    }
+  }
+  ```
+
+  **status_update** — agent reports progress
+  ```json
+  {
+    "type": "status_update",
+    "agent_id": "agent-uuid",
+    "status": "working",
+    "detail": "Analyzing auth module (3/7 files)"
+  }
+  ```
+
+  ### Cortex → Agent messages:
+
+  **registered** — registration confirmed
+  ```json
+  {
+    "type": "registered",
+    "agent_id": "agent-uuid",
+    "mesh_info": {
+      "peers": 5,
+      "run_id": null
+    }
+  }
+  ```
+
+  **task_request** — Cortex assigns work to the agent
+  ```json
+  {
+    "type": "task_request",
+    "task_id": "task-uuid",
+    "prompt": "Review the following code for security issues...",
+    "tools": ["shell", "cortex_query"],
+    "timeout_ms": 300000,
+    "context": {
+      "run_id": "run-uuid",
+      "team": "security",
+      "upstream_results": {}
+    }
+  }
+  ```
+
+  **peer_request** — another agent is invoking this agent as a tool
+  ```json
+  {
+    "type": "peer_request",
+    "request_id": "req-uuid",
+    "from_agent": "architect-agent",
+    "capability": "security-review",
+    "input": {
+      "code": "def transfer(amount, to)...",
+      "focus": "injection vulnerabilities"
+    },
+    "timeout_ms": 60000
+  }
+  ```
+
+  ## Existing Cortex Infrastructure
+
+  Key modules that the gateway integrates with:
+  - `lib/cortex/agent/server.ex` — Agent GenServer (state, lifecycle events)
+  - `lib/cortex/agent/supervisor.ex` — DynamicSupervisor for agents
+  - `lib/cortex/agent/registry.ex` — Registry for agent lookup by UUID
+  - `lib/cortex/mesh/member_list.ex` — SWIM-inspired membership (alive/suspect/dead)
+  - `lib/cortex/mesh/detector.ex` — failure detection via periodic checks
+  - `lib/cortex/telemetry.ex` — telemetry event definitions
+  - `lib/cortex/events.ex` — PubSub event broadcasting
+  - `lib/cortex_web/endpoint.ex` — Phoenix endpoint (port 4000)
+  - `lib/cortex_web/router.ex` — Phoenix router
+
+  The existing mesh MemberList and Detector modules track agents with state transitions
+  (alive → suspect → dead). The gateway registry should follow similar patterns but for
+  WebSocket-connected agents rather than OS-process-monitored agents.
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+  - Phoenix Channels use `handle_in/3` for incoming messages
+  - Use Jason for JSON encoding/decoding
+
+dependencies:
+  - docs/cluster-mode/PROJECT.md
+
+plans_dir: docs/cluster-mode/phase-1-agent-gateway/plans
+content_dir: docs/cluster-mode/phase-1-agent-gateway/content
+
+teammates:
+  - role: "Gateway Architect"
+    doc: gateway-architect.md
+    focus: |
+      Build the Phoenix WebSocket channel that agents connect to.
+
+      Files to create:
+      - `lib/cortex_web/channels/agent_socket.ex` — Phoenix Socket for agent connections
+        - Authenticate on connect (validate bearer token from params)
+        - Route to AgentChannel
+        - Track socket metadata (connect time, remote IP)
+      - `lib/cortex_web/channels/agent_channel.ex` — Phoenix Channel ("agent:lobby")
+        - `join/3` — validate agent, register with gateway registry
+        - `handle_in("register", payload, socket)` — process registration
+        - `handle_in("heartbeat", payload, socket)` — update agent health
+        - `handle_in("task_result", payload, socket)` — route task results
+        - `handle_in("status_update", payload, socket)` — broadcast status
+        - `terminate/2` — clean up on disconnect (mark agent as disconnected)
+        - Push messages to agent: "registered", "task_request", "peer_request"
+      - `test/cortex_web/channels/agent_channel_test.exs`
+
+      Integration:
+      - Add socket route to `lib/cortex_web/endpoint.ex`
+      - The channel delegates all state management to the Gateway.Registry (separate teammate)
+      - Emit PubSub events for LiveView updates on agent join/leave/status
+
+  - role: "Registry Engineer"
+    doc: registry-engineer.md
+    focus: |
+      Build the gateway registry — a GenServer that tracks all connected agents,
+      their capabilities, health state, and WebSocket channel pids.
+
+      Files to create:
+      - `lib/cortex/gateway/registry.ex` — Gateway Registry GenServer
+        - `register(agent_info, channel_pid)` — add agent to registry
+          - Assign UUID, store capabilities, monitor channel process
+          - Emit :agent_registered event
+        - `unregister(agent_id)` — remove agent from registry
+          - Clean up on disconnect or explicit leave
+          - Emit :agent_unregistered event
+        - `get(agent_id)` — look up agent by ID
+        - `list()` — list all registered agents
+        - `list_by_capability(capability)` — find agents with a given capability
+        - `update_status(agent_id, status)` — update agent status
+        - `get_channel(agent_id)` — get the WebSocket channel pid for routing
+        - State: a map of agent_id → RegisteredAgent struct
+        - Monitor channel pids — auto-unregister on channel crash/disconnect
+      - `lib/cortex/gateway/registered_agent.ex` — struct for a registered agent
+        - Fields: id, name, role, capabilities, status, channel_pid, metadata,
+          registered_at, last_heartbeat, load
+        - Status: :idle, :working, :draining, :disconnected
+      - `lib/cortex/gateway/health.ex` — health monitor for registered agents
+        - Periodic check: has each agent sent a heartbeat within the threshold?
+        - Mark stale agents as :disconnected after timeout
+        - Optionally remove agents that have been disconnected too long
+        - Configurable intervals (heartbeat_timeout, removal_timeout)
+      - `test/cortex/gateway/registry_test.exs`
+      - `test/cortex/gateway/health_test.exs`
+
+      Design notes:
+      - This is distinct from the existing Agent.Registry (which tracks Agent GenServer pids).
+        The Gateway.Registry tracks externally connected agents via WebSocket.
+      - Consider whether to unify with Agent.Registry eventually — for now, keep them separate.
+      - Use Process.monitor on channel pids for automatic cleanup.
+
+  - role: "Protocol Engineer"
+    doc: protocol-engineer.md
+    focus: |
+      Define the registration protocol — message types, validation, serialization,
+      and versioning.
+
+      Files to create:
+      - `lib/cortex/gateway/protocol.ex` — Protocol module
+        - Define all message types as structs or maps with validation
+        - `parse(raw_json)` — parse and validate incoming messages
+        - `encode(message)` — encode outgoing messages to JSON
+        - `validate_register/1` — validate registration payload
+        - `validate_heartbeat/1` — validate heartbeat payload
+        - `validate_task_result/1` — validate task result payload
+        - Protocol version checking (reject incompatible versions)
+      - `lib/cortex/gateway/protocol/messages.ex` — message struct definitions
+        - RegisterMessage, HeartbeatMessage, TaskResultMessage, StatusUpdateMessage
+        - RegisteredResponse, TaskRequestMessage, PeerRequestMessage
+        - Each struct has @enforce_keys for required fields
+        - Validation functions that return {:ok, struct} | {:error, reasons}
+      - `lib/cortex/gateway/auth.ex` — authentication module
+        - `authenticate(token)` — validate bearer token
+        - For now: simple token comparison against CORTEX_GATEWAY_TOKEN env var
+        - Designed to be swapped for OAuth/JWT later
+        - Returns {:ok, identity} | {:error, :unauthorized}
+      - `test/cortex/gateway/protocol_test.exs`
+      - `test/cortex/gateway/auth_test.exs`
+
+      Design notes:
+      - All messages include protocol_version for forward compatibility
+      - Validation should be strict — reject unknown fields, require all required fields
+      - Error messages should be clear — "missing required field: capabilities"
+      - The protocol should be documented enough that someone could implement a
+        sidecar in any language (Go, Python, Rust) from the spec alone
+
+  - role: "Integration & Telemetry Engineer"
+    doc: integration-telemetry.md
+    focus: |
+      Wire the gateway into Cortex's existing infrastructure — events, telemetry,
+      supervision, and initial dashboard support.
+
+      Files to create:
+      - `lib/cortex/gateway/supervisor.ex` — Supervisor for gateway processes
+        - Supervises Gateway.Registry and Gateway.Health
+        - Started as part of the main Cortex.Supervisor tree
+      - `lib/cortex/gateway/events.ex` — Gateway-specific event definitions
+        - Define PubSub topics for gateway events
+        - Events: agent_registered, agent_unregistered, agent_heartbeat,
+          agent_status_changed, task_dispatched, task_completed
+        - Compatible with existing Cortex.Events patterns
+
+      Files to modify:
+      - `lib/cortex/application.ex` — add Gateway.Supervisor to the supervision tree
+      - `lib/cortex_web/endpoint.ex` — add the agent WebSocket socket
+      - `lib/cortex/telemetry.ex` — add gateway telemetry events
+        - `[:cortex, :gateway, :agent, :registered]`
+        - `[:cortex, :gateway, :agent, :unregistered]`
+        - `[:cortex, :gateway, :agent, :heartbeat]`
+        - `[:cortex, :gateway, :task, :dispatched]`
+        - `[:cortex, :gateway, :task, :completed]`
+      - `lib/cortex_web/live/dashboard_live.ex` — show connected agent count
+      - `lib/cortex_web/live/mesh_live.ex` — show externally registered agents
+
+      Files for tests:
+      - `test/cortex/gateway/supervisor_test.exs`
+      - Integration test: full flow of connect → register → heartbeat → disconnect

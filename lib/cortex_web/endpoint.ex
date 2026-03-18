@@ -16,6 +16,9 @@ defmodule CortexWeb.Endpoint do
     longpoll: [connect_info: [session: @session_options]]
   )
 
+  # Agent gateway WebSocket — external agents connect here
+  socket("/agent", CortexWeb.AgentSocket, websocket: true)
+
   # Serve at "/" the static files from "priv/static" directory.
   plug(Plug.Static,
     at: "/",

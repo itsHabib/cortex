@@ -1,0 +1,309 @@
+phase: "Agent Mesh"
+
+goal: >
+  Build capability-based agent discovery, agent-to-agent tool use (the ask_agent tool),
+  Provider.External to bridge external agents into the orchestration layer, and update the
+  LiveView dashboard with mesh visualization.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 built the gateway
+  (WebSocket channel, registry, protocol). Phase 2 built the sidecar (local HTTP API,
+  Cortex connection, packaging). This phase completes the mesh by adding the intelligence
+  layer: how agents find each other, invoke each other, and integrate with Cortex's
+  existing orchestration modes.
+
+  ## What This Phase Delivers
+
+  1. **Capability-based discovery** — instead of addressing agents by name, address them
+     by what they can do. "Find me an agent that does code-review" → routes to the best
+     available agent with that capability.
+
+  2. **Agent-to-agent tool use** — the `ask_agent` tool that any agent can use to invoke
+     another agent synchronously. This turns the mesh from "parallel workers" into a
+     "service mesh of capabilities."
+
+  3. **Provider.External** — bridges externally registered agents into the Provider
+     abstraction from the Compute Spawning feature. The orchestration layer (DAG, mesh,
+     gossip) can assign work to external agents the same way it assigns work to local
+     or HTTP-spawned agents.
+
+  4. **Dashboard integration** — visualize the mesh, show connected agents, capability
+     map, invocation flow.
+
+  ## Agent-to-Agent Tool Use Flow
+
+  When Agent A wants to invoke Agent B:
+
+  1. Agent A calls its sidecar: `POST /ask/capable/code-review {"prompt": "Review this..."}`
+  2. Sidecar sends a `peer_request` to Cortex via WebSocket
+  3. Cortex Gateway.Discovery finds the best agent with `code-review` capability
+  4. Cortex sends `peer_request` to Agent B's channel
+  5. Agent B's sidecar receives it, exposes it via `GET /task`
+  6. Agent B processes the request, sends `task_result` via sidecar
+  7. Cortex routes the result back to Agent A's channel
+  8. Agent A's sidecar returns the result to the original `POST /ask` call
+
+  For the agent (LLM), this looks like a tool call:
+  ```json
+  {
+    "name": "ask_agent",
+    "description": "Invoke another agent in the mesh by capability or name",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "capability": {"type": "string", "description": "What capability you need"},
+        "agent_name": {"type": "string", "description": "Specific agent name (optional)"},
+        "prompt": {"type": "string", "description": "What you want the agent to do"},
+        "timeout_seconds": {"type": "integer", "default": 60}
+      },
+      "required": ["prompt"]
+    }
+  }
+  ```
+
+  ## Capability-Based Routing
+
+  When multiple agents have the same capability, Cortex needs to pick one. Routing strategies:
+  - **Least loaded** — pick the agent with fewest active tasks (default)
+  - **Round robin** — distribute evenly
+  - **Random** — simple, good enough for many cases
+  - **Affinity** — prefer the same agent for related requests (e.g., same run)
+
+  Agents advertise capabilities during registration:
+  ```json
+  "capabilities": ["code-review", "security-review", "test-writing"]
+  ```
+
+  Discovery should also support capability metadata:
+  ```json
+  "capabilities": [
+    {"name": "code-review", "languages": ["elixir", "python"]},
+    {"name": "security-review", "focus": ["owasp-top-10"]}
+  ]
+  ```
+
+  ## Provider.External
+
+  Provider.External implements the Provider behaviour (from Compute Spawning feature):
+  - `start/1` — look up or wait for an external agent matching the config
+  - `run/3` — send a task_request to the agent via the gateway, wait for task_result
+  - `stop/1` — no-op (external agents aren't owned by Cortex)
+
+  This means a YAML config can specify:
+  ```yaml
+  teams:
+    - name: security-review
+      provider: external
+      capabilities: [security-review]
+  ```
+
+  And Cortex will find a registered agent with that capability and route the work to it.
+
+  ## Existing Modules (from Phases 1-2)
+
+  Gateway:
+  - `lib/cortex_web/channels/agent_channel.ex` — WebSocket channel
+  - `lib/cortex/gateway/registry.ex` — agent registry
+  - `lib/cortex/gateway/registered_agent.ex` — agent struct (has capabilities field)
+  - `lib/cortex/gateway/protocol.ex` — message protocol
+  - `lib/cortex/gateway/health.ex` — health monitoring
+
+  Sidecar:
+  - `lib/cortex/sidecar/connection.ex` — WebSocket client
+  - `lib/cortex/sidecar/router.ex` — local HTTP API
+  - `lib/cortex/sidecar/handlers/invoke.ex` — /ask endpoints
+
+  Provider/Spawn (from Compute Spawning feature):
+  - `lib/cortex/provider.ex` — Provider behaviour
+  - `lib/cortex/provider/resolver.ex` — resolves provider from config
+  - `lib/cortex/orchestration/config/schema.ex` — Config structs
+
+  Existing mesh infrastructure:
+  - `lib/cortex/mesh/member_list.ex` — SWIM-inspired membership tracking
+  - `lib/cortex/mesh/detector.ex` — failure detection
+  - `lib/cortex/mesh/config.ex` — mesh configuration
+  - `lib/cortex_web/live/mesh_live.ex` — existing mesh LiveView
+
+  Existing tool infrastructure:
+  - `lib/cortex/tool/behaviour.ex` — Tool behaviour
+  - `lib/cortex/tool/executor.ex` — sandboxed execution
+  - `lib/cortex/tool/registry.ex` — tool name → module lookup
+  - `lib/cortex/tool/shell.ex` — reference Tool implementation
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+
+dependencies:
+  - docs/cluster-mode/PROJECT.md
+  - docs/cluster-mode/phase-1-agent-gateway/kickoff.yaml
+  - docs/cluster-mode/phase-2-sidecar/kickoff.yaml
+
+plans_dir: docs/cluster-mode/phase-3-agent-mesh/plans
+content_dir: docs/cluster-mode/phase-3-agent-mesh/content
+
+teammates:
+  - role: "Discovery Engineer"
+    doc: discovery-engineer.md
+    focus: |
+      Build capability-based agent discovery and routing.
+
+      Files to create:
+      - `lib/cortex/gateway/discovery.ex` — capability discovery module
+        - `find_by_capability(capability, opts)` — find agents with a capability
+          - Query Gateway.Registry for agents with matching capability
+          - Apply routing strategy (least_loaded, round_robin, random, affinity)
+          - Filter by status (only :idle or :working agents, not :disconnected)
+          - Return {:ok, registered_agent} | {:error, :no_capable_agent}
+        - `find_by_name(name)` — find agent by exact name
+        - `list_capabilities()` — list all unique capabilities in the mesh
+        - `capability_map()` — map of capability → [agent_ids]
+        - Support capability metadata matching (e.g., language: "elixir")
+      - `lib/cortex/gateway/router.ex` — request routing
+        - `route_request(request, opts)` — route a peer_request or task_request
+          - Use Discovery to find the target agent
+          - Send the request via the agent's WebSocket channel
+          - Track pending requests for response routing
+          - Handle timeout (return error if no response within limit)
+        - `route_response(response)` — route a response back to the requester
+          - Look up the pending request
+          - Forward the response to the requesting agent's channel
+        - Pending request tracking with timeout cleanup
+      - `lib/cortex/gateway/routing_strategy.ex` — pluggable routing strategies
+        - Behaviour with `select(agents, request, state)` callback
+        - Built-in: LeastLoaded, RoundRobin, Random
+        - Configurable per-capability or globally
+      - `test/cortex/gateway/discovery_test.exs`
+      - `test/cortex/gateway/router_test.exs`
+      - `test/cortex/gateway/routing_strategy_test.exs`
+
+  - role: "Agent Tool Engineer"
+    doc: agent-tool.md
+    focus: |
+      Build the ask_agent tool that agents use to invoke other agents, and integrate
+      it with the Tool system so it's available to all providers.
+
+      Files to create:
+      - `lib/cortex/tool/agent_tool.ex` — Agent invocation tool
+        - Implements Tool.Behaviour
+        - name: "ask_agent"
+        - description: "Invoke another agent in the mesh by capability or name"
+        - schema: capability (string, optional), agent_name (string, optional),
+          prompt (string, required), timeout_seconds (integer, default 60)
+        - execute: route through Gateway.Router
+          - If capability provided → Discovery.find_by_capability
+          - If agent_name provided → Discovery.find_by_name
+          - Send peer_request, wait for response
+          - Return result text or error
+        - Handle recursion: track call depth, reject if > max_depth (default 5)
+        - Handle cycles: track call chain, reject if agent already in chain
+      - `lib/cortex/tool/mesh_query_tool.ex` — Mesh query tool
+        - Implements Tool.Behaviour
+        - name: "mesh_query"
+        - description: "Query the agent mesh — list agents, capabilities, status"
+        - schema: query_type (enum: roster, capabilities, agent_status),
+          filters (optional map)
+        - execute: query Gateway.Registry, return formatted results
+        - This is read-only — no side effects
+      - `test/cortex/tool/agent_tool_test.exs`
+      - `test/cortex/tool/mesh_query_tool_test.exs`
+
+      Integration:
+      - Register both tools in Tool.Registry on startup
+      - These tools should be available to HTTP provider agents (via Tool Bridge)
+      - For CLI provider agents, these tools are available via the sidecar HTTP API
+        (the sidecar's /ask and /roster endpoints serve the same purpose)
+
+      Design notes:
+      - The ask_agent tool is synchronous from the calling agent's perspective — it
+        blocks until the target agent responds or times out
+      - Call depth tracking prevents infinite recursion (Agent A asks Agent B asks
+        Agent A asks Agent B...)
+      - Each invocation creates a unique request_id for response routing
+
+  - role: "External Provider Engineer"
+    doc: external-provider.md
+    focus: |
+      Build Provider.External — the bridge between externally registered agents and
+      the orchestration layer, so DAG/mesh/gossip modes can use external agents.
+
+      Files to create:
+      - `lib/cortex/provider/external.ex` — Provider.External implementation
+        - Implements the Provider behaviour
+        - `start/1` — validate config, check that required capabilities exist in mesh
+          - If no matching agent found, wait briefly or return error
+          - Option: `wait_for_agent: true` with timeout — block until a capable agent registers
+        - `run/3` — send work to an external agent
+          - Use Gateway.Discovery to find a matching agent
+          - Send task_request via Gateway.Router
+          - Stream status_update events as they arrive (for LiveView)
+          - Wait for task_result
+          - Build and return TeamResult struct
+        - `stop/1` — cancel in-flight task (send cancellation to agent)
+        - Handle agent disconnect mid-task — find another capable agent or return error
+      - `lib/cortex/provider/external/task_tracker.ex` — track in-flight tasks
+        - Map task_id → {agent_id, caller_pid, started_at, timeout}
+        - Clean up timed-out tasks
+        - Re-route tasks if the agent disconnects
+      - `test/cortex/provider/external_test.exs`
+      - `test/cortex/provider/external/task_tracker_test.exs`
+
+      Config integration:
+      - Update Provider.Resolver to handle `provider: :external`
+      - Update Config.Validator to validate external provider config:
+        - Must specify `capabilities` list (what capability to look for)
+        - Optional: `agent_name` (prefer a specific agent)
+        - Optional: `wait_for_agent` (true/false, default false)
+
+      Example YAML:
+      ```yaml
+      teams:
+        - name: security-review
+          provider: external
+          capabilities: [security-review]
+          wait_for_agent: true
+      ```
+
+  - role: "Dashboard & Observability Engineer"
+    doc: dashboard-observability.md
+    focus: |
+      Update the LiveView dashboard to visualize the agent mesh, show connected agents,
+      capability maps, and invocation flows.
+
+      Files to modify:
+      - `lib/cortex_web/live/mesh_live.ex` — enhance existing mesh LiveView
+        - Show externally registered agents alongside spawned agents
+        - Agent cards with: name, role, capabilities, status, connection time
+        - Real-time status updates via PubSub subscription
+        - Capability filter — show only agents with a specific capability
+        - Health indicators (connected, heartbeat age, load)
+      - `lib/cortex_web/live/dashboard_live.ex` — add mesh summary to main dashboard
+        - Connected agent count
+        - Capability count
+        - Active invocations count
+
+      Files to create:
+      - `lib/cortex_web/live/mesh_detail_live.ex` — detailed agent view
+        - Agent info, current task, invocation history
+        - Real-time log stream from the agent (via status_updates)
+        - Actions: send message, assign task, disconnect
+      - `lib/cortex_web/components/mesh_components.ex` — reusable mesh UI components
+        - Agent card component (name, role, capabilities, status badge)
+        - Capability tag component (clickable, filters the list)
+        - Invocation flow component (shows A → B → C call chain)
+        - Mesh topology visualization (SVG or simple grid)
+      - `test/cortex_web/live/mesh_live_test.exs`
+      - `test/cortex_web/live/mesh_detail_live_test.exs`
+
+      Telemetry dashboards:
+      - Add Prometheus metrics for:
+        - `cortex_mesh_agents_connected` (gauge)
+        - `cortex_mesh_invocations_total` (counter, by capability)
+        - `cortex_mesh_invocation_duration_seconds` (histogram)
+        - `cortex_mesh_agent_heartbeat_age_seconds` (gauge, per agent)
+      - Update Grafana dashboard config in `infra/` if it exists

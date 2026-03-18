@@ -24,6 +24,11 @@ defmodule Cortex.Telemetry do
   | `[:cortex, :mesh, :member_suspect]` | `%{}` | `name` |
   | `[:cortex, :mesh, :member_dead]` | `%{}` | `name` |
   | `[:cortex, :mesh, :heartbeat]` | `%{}` | `cluster` |
+  | `[:cortex, :gateway, :agent, :registered]` | `%{system_time: integer}` | `agent_id`, `name`, `role`, `capabilities` |
+  | `[:cortex, :gateway, :agent, :unregistered]` | `%{system_time: integer}` | `agent_id`, `name`, `reason` |
+  | `[:cortex, :gateway, :agent, :heartbeat]` | `%{system_time: integer}` | `agent_id`, `status`, `active_tasks` |
+  | `[:cortex, :gateway, :task, :dispatched]` | `%{system_time: integer}` | `task_id`, `agent_id` |
+  | `[:cortex, :gateway, :task, :completed]` | `%{duration_ms: integer}` | `task_id`, `agent_id`, `status` |
 
   ## Usage
 
@@ -50,6 +55,14 @@ defmodule Cortex.Telemetry do
   @mesh_member_dead [:cortex, :mesh, :member_dead]
   @mesh_heartbeat [:cortex, :mesh, :heartbeat]
 
+  # -- Gateway Event Name Definitions --
+
+  @gateway_agent_registered [:cortex, :gateway, :agent, :registered]
+  @gateway_agent_unregistered [:cortex, :gateway, :agent, :unregistered]
+  @gateway_agent_heartbeat [:cortex, :gateway, :agent, :heartbeat]
+  @gateway_task_dispatched [:cortex, :gateway, :task, :dispatched]
+  @gateway_task_completed [:cortex, :gateway, :task, :completed]
+
   @doc "Returns the list of all Cortex telemetry event names."
   @spec event_names() :: [list(atom())]
   def event_names do
@@ -68,7 +81,12 @@ defmodule Cortex.Telemetry do
       @mesh_member_joined,
       @mesh_member_suspect,
       @mesh_member_dead,
-      @mesh_heartbeat
+      @mesh_heartbeat,
+      @gateway_agent_registered,
+      @gateway_agent_unregistered,
+      @gateway_agent_heartbeat,
+      @gateway_task_dispatched,
+      @gateway_task_completed
     ]
   end
 
@@ -179,5 +197,42 @@ defmodule Cortex.Telemetry do
   @spec emit_mesh_heartbeat(map()) :: :ok
   def emit_mesh_heartbeat(metadata) when is_map(metadata) do
     :telemetry.execute(@mesh_heartbeat, %{system_time: System.system_time()}, metadata)
+  end
+
+  # -- Gateway Emission Helpers --
+
+  @doc "Emits a `[:cortex, :gateway, :agent, :registered]` event."
+  @spec emit_gateway_agent_registered(map()) :: :ok
+  def emit_gateway_agent_registered(metadata) when is_map(metadata) do
+    :telemetry.execute(@gateway_agent_registered, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :gateway, :agent, :unregistered]` event."
+  @spec emit_gateway_agent_unregistered(map()) :: :ok
+  def emit_gateway_agent_unregistered(metadata) when is_map(metadata) do
+    :telemetry.execute(
+      @gateway_agent_unregistered,
+      %{system_time: System.system_time()},
+      metadata
+    )
+  end
+
+  @doc "Emits a `[:cortex, :gateway, :agent, :heartbeat]` event."
+  @spec emit_gateway_agent_heartbeat(map()) :: :ok
+  def emit_gateway_agent_heartbeat(metadata) when is_map(metadata) do
+    :telemetry.execute(@gateway_agent_heartbeat, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :gateway, :task, :dispatched]` event."
+  @spec emit_gateway_task_dispatched(map()) :: :ok
+  def emit_gateway_task_dispatched(metadata) when is_map(metadata) do
+    :telemetry.execute(@gateway_task_dispatched, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :gateway, :task, :completed]` event."
+  @spec emit_gateway_task_completed(map()) :: :ok
+  def emit_gateway_task_completed(metadata) when is_map(metadata) do
+    measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
+    :telemetry.execute(@gateway_task_completed, measurements, metadata)
   end
 end

@@ -31,7 +31,9 @@ defmodule Cortex.Application do
         # Messaging: DynamicSupervisor for per-agent Mailbox processes
         {Cortex.Messaging.Supervisor, name: Cortex.Messaging.Supervisor},
         # Workspace: serializes read-modify-write operations on workspace JSON files
-        Cortex.Orchestration.WorkspaceLock
+        Cortex.Orchestration.WorkspaceLock,
+        # Gateway: supervisor for external agent registry and health monitor
+        Cortex.Gateway.Supervisor
       ] ++ persistence_children() ++ web_children()
 
     opts = [strategy: :one_for_one, name: Cortex.Supervisor]
@@ -106,6 +108,29 @@ defmodule Cortex.Application do
       counter("cortex.agent.stopped.system_time",
         tags: [:agent_id, :reason],
         description: "Total agents stopped"
+      ),
+
+      # Gateway metrics
+      counter("cortex.gateway.agent.registered.system_time",
+        tags: [:agent_id, :name, :role],
+        description: "Total gateway agents registered"
+      ),
+      counter("cortex.gateway.agent.unregistered.system_time",
+        tags: [:agent_id, :reason],
+        description: "Total gateway agents unregistered"
+      ),
+      counter("cortex.gateway.agent.heartbeat.system_time",
+        tags: [:agent_id, :status],
+        description: "Total gateway agent heartbeats"
+      ),
+      counter("cortex.gateway.task.dispatched.system_time",
+        tags: [:agent_id],
+        description: "Total gateway tasks dispatched"
+      ),
+      distribution("cortex.gateway.task.completed.duration_ms",
+        tags: [:agent_id, :status],
+        description: "Gateway task completion duration",
+        reporter_options: [buckets: [100, 500, 1_000, 5_000, 30_000, 60_000]]
       )
     ]
   end

@@ -3,7 +3,10 @@ defmodule CortexWeb.DashboardLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: safe_subscribe()
+    if connected?(socket) do
+      safe_subscribe()
+      safe_subscribe_gateway()
+    end
 
     runs = safe_list_runs(limit: 10)
 
@@ -11,12 +14,15 @@ defmodule CortexWeb.DashboardLive do
 
     active_count = Enum.count(runs, fn r -> r.status == "running" end)
 
+    connected_agents = safe_gateway_agent_count()
+
     {:ok,
      assign(socket,
        runs: runs,
        total_input_tokens: total_input,
        total_output_tokens: total_output,
        active_count: active_count,
+       connected_agents: connected_agents,
        page_title: "Dashboard"
      )}
   end
@@ -37,6 +43,11 @@ defmodule CortexWeb.DashboardLive do
        total_output_tokens: total_output,
        active_count: active_count
      )}
+  end
+
+  def handle_info(%{type: type}, socket)
+      when type in [:agent_registered, :agent_unregistered] do
+    {:noreply, assign(socket, connected_agents: safe_gateway_agent_count())}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -63,7 +74,7 @@ defmodule CortexWeb.DashboardLive do
       </:actions>
     </.header>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
       <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
         <p class="text-sm text-gray-400">Total Runs</p>
         <p class="text-2xl font-bold text-white mt-1">{length(@runs)}</p>
@@ -77,6 +88,10 @@ defmodule CortexWeb.DashboardLive do
         <p class="text-2xl font-bold text-white mt-1">
           <.token_display input={@total_input_tokens} output={@total_output_tokens} />
         </p>
+      </div>
+      <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+        <p class="text-sm text-gray-400">Connected Agents</p>
+        <p class="text-2xl font-bold text-white mt-1">{@connected_agents}</p>
       </div>
     </div>
 
@@ -138,6 +153,18 @@ defmodule CortexWeb.DashboardLive do
     Cortex.Events.subscribe()
   rescue
     _ -> :ok
+  end
+
+  defp safe_subscribe_gateway do
+    Cortex.Gateway.Events.subscribe()
+  rescue
+    _ -> :ok
+  end
+
+  defp safe_gateway_agent_count do
+    Cortex.Gateway.Registry.count()
+  rescue
+    _ -> 0
   end
 
   defp format_time(nil), do: "--"

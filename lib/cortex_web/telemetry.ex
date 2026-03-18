@@ -93,6 +93,24 @@ defmodule CortexWeb.Telemetry do
         unit: :millisecond
       ),
 
+      # Cortex gateway metrics
+      counter("cortex.gateway.agent.registered.system_time",
+        description: "Gateway agents registered"
+      ),
+      counter("cortex.gateway.agent.unregistered.system_time",
+        description: "Gateway agents unregistered"
+      ),
+      counter("cortex.gateway.agent.heartbeat.system_time",
+        description: "Gateway agent heartbeats"
+      ),
+      counter("cortex.gateway.task.dispatched.system_time",
+        description: "Gateway tasks dispatched"
+      ),
+      summary("cortex.gateway.task.completed.duration_ms",
+        description: "Gateway task completion duration",
+        unit: :millisecond
+      ),
+
       # VM metrics
       summary("vm.memory.total", unit: {:byte, :megabyte}),
       summary("vm.total_run_queue_lengths.total"),

@@ -1,0 +1,274 @@
+phase: "HTTP Provider"
+
+goal: >
+  Implement Provider.HTTP — a provider that calls the Claude Messages API directly via HTTP,
+  manages the full agentic conversation loop (send → stream → tool_use → execute → repeat),
+  and integrates with Cortex's existing tool and telemetry systems.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 introduced Provider and
+  SpawnBackend behaviours and refactored existing CLI spawning into Provider.CLI. This phase
+  adds Provider.HTTP — a provider that calls the Claude Messages API directly instead of
+  shelling out to `claude -p`.
+
+  ## Why HTTP Provider?
+
+  The CLI provider (`claude -p`) is convenient but opaque — Cortex can't see the conversation,
+  can't control tool execution, can't inspect token usage in real-time. The HTTP provider gives
+  Cortex full control of the agentic loop:
+  1. Send messages + tool definitions to Claude API
+  2. Stream the response (SSE)
+  3. If response contains tool_use blocks → execute the tools
+  4. Append tool results to the conversation
+  5. Send updated conversation back to the API
+  6. Repeat until the model responds with stop_reason: "end_turn"
+
+  ## Claude Messages API
+
+  Endpoint: POST https://api.anthropic.com/v1/messages
+  Auth: x-api-key header with ANTHROPIC_API_KEY env var
+  Content-Type: application/json
+  Streaming: Set `"stream": true` for SSE responses
+
+  Request body:
+  ```json
+  {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 8192,
+    "system": "You are...",
+    "messages": [
+      {"role": "user", "content": "..."},
+      {"role": "assistant", "content": "..."}
+    ],
+    "tools": [
+      {
+        "name": "shell",
+        "description": "Execute a shell command",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "command": {"type": "string"},
+            "args": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["command"]
+        }
+      }
+    ],
+    "stream": true
+  }
+  ```
+
+  SSE stream events (key ones):
+  - `message_start` — contains message metadata, usage.input_tokens
+  - `content_block_start` — new content block (text or tool_use), contains index and type
+  - `content_block_delta` — incremental content (text_delta or input_json_delta)
+  - `content_block_stop` — content block complete
+  - `message_delta` — end of message, contains stop_reason and usage.output_tokens
+  - `message_stop` — stream complete
+
+  Tool use flow:
+  - Response contains content blocks of type "tool_use" with name, id, and input
+  - stop_reason is "tool_use" (not "end_turn")
+  - Client executes the tool, then sends a new request with the tool result:
+    ```json
+    {"role": "user", "content": [
+      {"type": "tool_result", "tool_use_id": "toolu_xxx", "content": "result text"}
+    ]}
+    ```
+
+  Model names to support:
+  - "claude-sonnet-4-20250514" (sonnet)
+  - "claude-haiku-4-5-20251001" (haiku)
+  - "claude-opus-4-20250514" (opus)
+
+  ## Existing Infrastructure
+
+  Provider behaviour (from Phase 1):
+  - `lib/cortex/provider.ex` — behaviour definition
+  - `lib/cortex/provider/cli.ex` — CLI implementation (reference)
+  - `lib/cortex/provider/resolver.ex` — resolves provider from config
+
+  Tool system:
+  - `lib/cortex/tool/behaviour.ex` — callbacks: name(), description(), schema(), execute(args)
+  - `lib/cortex/tool/shell.ex` — Shell tool (allowlisted commands)
+  - `lib/cortex/tool/executor.ex` — sandboxed execution with timeout and crash isolation
+  - `lib/cortex/tool/registry.ex` — maps tool names to modules
+
+  Telemetry:
+  - `lib/cortex/telemetry.ex` — event definitions and emission helpers
+  - Existing events: `[:cortex, :run, :*]`, `[:cortex, :team, :*]`, `[:cortex, :tool, :*]`
+
+  TeamResult struct (`lib/cortex/orchestration/team_result.ex`):
+  - Fields: status, result_text, input_tokens, output_tokens, cost_usd, duration_ms, session_id
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+  - Use Req library for HTTP (already common in Elixir ecosystem)
+  - Use Finch for connection pooling (Req uses Finch under the hood)
+
+dependencies:
+  - docs/compute-spawning/PROJECT.md
+  - docs/compute-spawning/phase-1-foundation/kickoff.yaml
+
+plans_dir: docs/compute-spawning/phase-2-http-provider/plans
+content_dir: docs/compute-spawning/phase-2-http-provider/content
+
+teammates:
+  - role: "API Client Engineer"
+    doc: api-client.md
+    focus: |
+      Build the HTTP client for the Claude Messages API with SSE streaming support.
+
+      Files to create:
+      - `lib/cortex/provider/http/client.ex` — HTTP client module
+        - `send_message(messages, tools, opts)` — POST to /v1/messages
+        - Handles auth (ANTHROPIC_API_KEY from env or config)
+        - Supports both streaming and non-streaming modes
+        - Model name mapping: "sonnet" → "claude-sonnet-4-20250514", etc.
+        - Returns a stream of parsed SSE events
+        - Configurable base_url for testing
+        - Connection pooling via Finch
+      - `lib/cortex/provider/http/sse.ex` — SSE parser
+        - Parses raw SSE text stream into structured events
+        - Handles SSE format: "event: type\ndata: json\n\n"
+        - Accumulates partial data across chunks
+        - Emits parsed events as they complete
+        - Handles connection errors and reconnection
+      - `test/cortex/provider/http/client_test.exs`
+      - `test/cortex/provider/http/sse_test.exs`
+
+      Dependencies to add to mix.exs:
+      - `{:req, "~> 0.5"}` (if not already present)
+
+      Design notes:
+      - The client should be stateless — it sends a request and returns a stream
+      - All conversation state management is handled by the Agentic Loop (separate teammate)
+      - The SSE parser should be a standalone module that can parse any SSE stream
+
+  - role: "Agentic Loop Engineer"
+    doc: agentic-loop.md
+    focus: |
+      Build the conversation loop that drives the HTTP provider — the core GenServer that
+      manages the send → stream → tool_use → execute → repeat cycle.
+
+      Files to create:
+      - `lib/cortex/provider/http/loop.ex` — Agentic loop GenServer
+        - Manages conversation state (message history)
+        - Main loop:
+          1. Call Client.send_message with current messages + tools
+          2. Stream and accumulate the response
+          3. Append assistant response to message history
+          4. If stop_reason == "tool_use":
+             a. Extract tool_use blocks from response
+             b. Execute each tool via Tool.Executor
+             c. Build tool_result messages
+             d. Append to message history
+             e. Go to step 1
+          5. If stop_reason == "end_turn":
+             a. Extract final text response
+             b. Build TeamResult
+             c. Return result
+        - Configurable max iterations (prevent infinite tool loops)
+        - Emit telemetry events for each API call and tool execution
+        - Broadcast PubSub events for LiveView updates
+        - Handle API errors (rate limits, server errors) with backoff
+      - `lib/cortex/provider/http/conversation.ex` — Conversation state struct
+        - Messages list (grows over time)
+        - Metadata (model, system prompt, tools)
+        - Token counters (accumulated across multiple API calls)
+        - Iteration counter
+      - `test/cortex/provider/http/loop_test.exs`
+      - `test/cortex/provider/http/conversation_test.exs`
+
+      Design notes:
+      - The loop should be spawnable as a Task (for integration with executor)
+        or as a GenServer (for long-lived agents)
+      - Each iteration of the loop is one API call — track tokens per call
+        and total across the conversation
+      - The loop doesn't know about specific tools — it delegates to Tool.Executor
+      - Consider context window management: if conversation grows too large,
+        may need to truncate early messages
+
+  - role: "Tool Schema Engineer"
+    doc: tool-schema.md
+    focus: |
+      Bridge Cortex's Tool behaviour system to the Claude API's tool format, and handle
+      execution of tool_use blocks from API responses.
+
+      Files to create:
+      - `lib/cortex/provider/http/tool_bridge.ex` — bidirectional bridge
+        - `to_api_tools(tool_modules)` — convert list of Tool behaviour modules to
+          Claude API tool format (name, description, input_schema)
+        - `execute_tool_use(tool_use_block)` — given a tool_use block from API response,
+          find the matching Tool module and execute it via Tool.Executor
+        - `to_tool_result(tool_use_id, result)` — format execution result into
+          tool_result message format for the API
+        - Handle tool execution errors gracefully — return error text as tool_result
+          rather than crashing the conversation loop
+      - `test/cortex/provider/http/tool_bridge_test.exs`
+
+      Integration points:
+      - `lib/cortex/tool/behaviour.ex` — each tool's `schema()` callback returns a map
+        that should map cleanly to Claude API's `input_schema`
+      - `lib/cortex/tool/executor.ex` — use `Executor.execute/3` for sandboxed execution
+      - `lib/cortex/tool/registry.ex` — look up tool modules by name string
+
+      The tool_use block from the API looks like:
+      ```json
+      {
+        "type": "tool_use",
+        "id": "toolu_01A09q90qw90lq917835lq9",
+        "name": "shell",
+        "input": {"command": "ls", "args": ["-la"]}
+      }
+      ```
+
+      The tool_result message looks like:
+      ```json
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+        "content": "total 48\ndrwxr-xr-x 12 user staff 384 Mar 15 10:00 .\n..."
+      }
+      ```
+
+  - role: "Observability Engineer"
+    doc: observability.md
+    focus: |
+      Wire the HTTP provider into Cortex's telemetry and observability systems.
+      Implement Provider.HTTP itself as the top-level module tying everything together.
+
+      Files to create:
+      - `lib/cortex/provider/http.ex` — Provider.HTTP implementation
+        - Implements the Provider behaviour from Phase 1
+        - `start/1` — validate config (API key present, model valid)
+        - `run/3` — create conversation, start the agentic loop, return TeamResult
+        - `stop/1` — clean up (cancel in-flight requests)
+        - Wire up telemetry emission for the full lifecycle
+      - `lib/cortex/provider/http/usage.ex` — Token usage tracking
+        - Parse usage from SSE message_start (input_tokens) and message_delta (output_tokens)
+        - Accumulate across multiple API calls in a conversation
+        - Calculate cost based on model pricing
+        - Emit telemetry events compatible with existing token tracking
+      - `test/cortex/provider/http_test.exs` — integration tests
+      - `test/cortex/provider/http/usage_test.exs`
+
+      Telemetry events to emit:
+      - `[:cortex, :provider, :http, :request, :start]` — API call initiated
+      - `[:cortex, :provider, :http, :request, :stop]` — API call completed
+      - `[:cortex, :provider, :http, :request, :error]` — API call failed
+      - `[:cortex, :provider, :http, :tool_use, :start]` — tool execution started
+      - `[:cortex, :provider, :http, :tool_use, :stop]` — tool execution completed
+      - `[:cortex, :provider, :http, :loop, :iteration]` — each loop iteration
+      - `[:cortex, :provider, :http, :loop, :complete]` — conversation finished
+
+      PubSub broadcasts for LiveView:
+      - Token updates (compatible with existing dashboard counters)
+      - Status updates (running, tool_use, waiting, done)
+      - Streaming text chunks (for real-time output display)

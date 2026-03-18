@@ -27,7 +27,7 @@ defmodule Cortex.TelemetryTest do
     test "returns all defined event names" do
       names = Telemetry.event_names()
       assert is_list(names)
-      assert length(names) == 15
+      assert length(names) == 20
 
       assert [:cortex, :agent, :started] in names
       assert [:cortex, :agent, :stopped] in names
@@ -44,6 +44,11 @@ defmodule Cortex.TelemetryTest do
       assert [:cortex, :mesh, :member_suspect] in names
       assert [:cortex, :mesh, :member_dead] in names
       assert [:cortex, :mesh, :heartbeat] in names
+      assert [:cortex, :gateway, :agent, :registered] in names
+      assert [:cortex, :gateway, :agent, :unregistered] in names
+      assert [:cortex, :gateway, :agent, :heartbeat] in names
+      assert [:cortex, :gateway, :task, :dispatched] in names
+      assert [:cortex, :gateway, :task, :completed] in names
     end
   end
 
@@ -126,6 +131,64 @@ defmodule Cortex.TelemetryTest do
       assert :ok = Telemetry.emit_tool_executed(metadata)
 
       assert_receive {:telemetry_event, [:cortex, :tool, :executed], %{duration_ms: 250},
+                      ^metadata}
+    end
+  end
+
+  describe "emit_gateway_agent_registered/1" do
+    test "emits gateway agent registered event with system_time" do
+      metadata = %{agent_id: "gw-1", name: "scanner", role: "security", capabilities: ["scan"]}
+      assert :ok = Telemetry.emit_gateway_agent_registered(metadata)
+
+      assert_receive {:telemetry_event, [:cortex, :gateway, :agent, :registered],
+                      %{system_time: _}, ^metadata}
+    end
+  end
+
+  describe "emit_gateway_agent_unregistered/1" do
+    test "emits gateway agent unregistered event with system_time" do
+      metadata = %{agent_id: "gw-1", name: "scanner", reason: :disconnected}
+      assert :ok = Telemetry.emit_gateway_agent_unregistered(metadata)
+
+      assert_receive {:telemetry_event, [:cortex, :gateway, :agent, :unregistered],
+                      %{system_time: _}, ^metadata}
+    end
+  end
+
+  describe "emit_gateway_agent_heartbeat/1" do
+    test "emits gateway agent heartbeat event with system_time" do
+      metadata = %{agent_id: "gw-1", status: :idle, active_tasks: 0}
+      assert :ok = Telemetry.emit_gateway_agent_heartbeat(metadata)
+
+      assert_receive {:telemetry_event, [:cortex, :gateway, :agent, :heartbeat],
+                      %{system_time: _}, ^metadata}
+    end
+  end
+
+  describe "emit_gateway_task_dispatched/1" do
+    test "emits gateway task dispatched event with system_time" do
+      metadata = %{task_id: "task-1", agent_id: "gw-1"}
+      assert :ok = Telemetry.emit_gateway_task_dispatched(metadata)
+
+      assert_receive {:telemetry_event, [:cortex, :gateway, :task, :dispatched],
+                      %{system_time: _}, ^metadata}
+    end
+  end
+
+  describe "emit_gateway_task_completed/1" do
+    test "emits gateway task completed event with duration_ms" do
+      metadata = %{task_id: "task-1", agent_id: "gw-1", status: :completed, duration_ms: 1500}
+      assert :ok = Telemetry.emit_gateway_task_completed(metadata)
+
+      assert_receive {:telemetry_event, [:cortex, :gateway, :task, :completed],
+                      %{duration_ms: 1500}, ^metadata}
+    end
+
+    test "defaults duration_ms to 0 when not provided" do
+      metadata = %{task_id: "task-1", agent_id: "gw-1", status: :completed}
+      assert :ok = Telemetry.emit_gateway_task_completed(metadata)
+
+      assert_receive {:telemetry_event, [:cortex, :gateway, :task, :completed], %{duration_ms: 0},
                       ^metadata}
     end
   end

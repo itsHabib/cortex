@@ -17,7 +17,12 @@ defmodule CortexWeb.MeshLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: safe_subscribe()
+    if connected?(socket) do
+      safe_subscribe()
+      safe_subscribe_gateway()
+    end
+
+    gateway_agents = safe_list_gateway_agents()
 
     {:ok,
      assign(socket,
@@ -28,6 +33,8 @@ defmodule CortexWeb.MeshLive do
        run_id: nil,
        # Members from PubSub events
        members: [],
+       # Gateway agents from external registry
+       gateway_agents: gateway_agents,
        # Activity feed
        activities: [],
        # Token tracking
@@ -211,6 +218,11 @@ defmodule CortexWeb.MeshLive do
        messages: messages,
        activities: push_activity(socket.assigns.activities, :team_progress, name, nil)
      )}
+  end
+
+  def handle_info(%{type: type}, socket)
+      when type in [:agent_registered, :agent_unregistered] do
+    {:noreply, assign(socket, gateway_agents: safe_list_gateway_agents())}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -539,6 +551,66 @@ defmodule CortexWeb.MeshLive do
         </div>
       <% end %>
 
+      <!-- External Gateway Agents -->
+      <%= if @gateway_agents != [] do %>
+        <div class="mt-6">
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
+              External Agents
+              <span class="text-gray-600 normal-case font-normal ml-1">
+                (via gateway — {length(@gateway_agents)} connected)
+              </span>
+            </h2>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-gray-800">
+                    <th class="text-left text-gray-500 text-xs uppercase py-2 pr-3">Name</th>
+                    <th class="text-left text-gray-500 text-xs uppercase py-2 pr-3">Role</th>
+                    <th class="text-left text-gray-500 text-xs uppercase py-2 pr-3">Capabilities</th>
+                    <th class="text-center text-gray-500 text-xs uppercase py-2 px-2">Status</th>
+                    <th class="text-center text-gray-500 text-xs uppercase py-2 px-2">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    :for={agent <- @gateway_agents}
+                    class="border-b border-gray-800/50"
+                  >
+                    <td class="py-2 pr-3">
+                      <span class="text-white">{agent.name}</span>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <span class="text-gray-400 text-xs">{agent.role || "—"}</span>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <div class="flex flex-wrap gap-1">
+                        <span
+                          :for={cap <- agent.capabilities || []}
+                          class="bg-gray-800 text-gray-300 text-xs px-1.5 py-0.5 rounded"
+                        >
+                          {cap}
+                        </span>
+                      </div>
+                    </td>
+                    <td class="py-2 px-2 text-center">
+                      <span class={gateway_status_badge_class(agent.status)}>
+                        {agent.status}
+                      </span>
+                    </td>
+                    <td class="py-2 px-2 text-center">
+                      <span class="bg-cortex-900/50 text-cortex-300 text-xs px-2 py-0.5 rounded">
+                        gateway
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
       <!-- New Mesh Run Form -->
       <div class="mt-6">
         <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
@@ -765,6 +837,18 @@ defmodule CortexWeb.MeshLive do
     _ -> :ok
   end
 
+  defp safe_subscribe_gateway do
+    Cortex.Gateway.Events.subscribe()
+  rescue
+    _ -> :ok
+  end
+
+  defp safe_list_gateway_agents do
+    Cortex.Gateway.Registry.list()
+  rescue
+    _ -> []
+  end
+
   defp effective_yaml(socket) do
     cond do
       socket.assigns.yaml_content != "" ->
@@ -969,6 +1053,26 @@ defmodule CortexWeb.MeshLive do
   end
 
   defp state_badge_class(_) do
+    "bg-gray-800 text-gray-500 text-xs px-2 py-0.5 rounded"
+  end
+
+  defp gateway_status_badge_class(:idle) do
+    "bg-blue-900/50 text-blue-300 text-xs px-2 py-0.5 rounded"
+  end
+
+  defp gateway_status_badge_class(:working) do
+    "bg-green-900/50 text-green-300 text-xs px-2 py-0.5 rounded"
+  end
+
+  defp gateway_status_badge_class(:draining) do
+    "bg-yellow-900/50 text-yellow-300 text-xs px-2 py-0.5 rounded"
+  end
+
+  defp gateway_status_badge_class(:disconnected) do
+    "bg-red-900/50 text-red-300 text-xs px-2 py-0.5 rounded"
+  end
+
+  defp gateway_status_badge_class(_) do
     "bg-gray-800 text-gray-500 text-xs px-2 py-0.5 rounded"
   end
 
