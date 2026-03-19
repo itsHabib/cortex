@@ -1,0 +1,497 @@
+phase: "Sidecar (gRPC + Go)"
+
+goal: >
+  Build the sidecar — a Go binary that runs alongside agents, connects to the
+  Cortex gateway via gRPC bidirectional streaming, and exposes a local HTTP API
+  that agents call to interact with the mesh. Add a gRPC data-plane endpoint to
+  the Cortex gateway alongside the existing Phoenix control plane.
+
+system_context: |
+  ## Project Overview
+
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 built the gateway —
+  a Phoenix WebSocket channel and registry where agents connect. Phase 2 pivots the
+  agent-facing transport from Phoenix Channels to gRPC, keeping Phoenix for the
+  control plane (LiveView dashboard, operator UI).
+
+  ## Architecture — Control Plane vs Data Plane
+
+  ```
+  ┌─────────────────────────────────────────────────────────┐
+  │                    Cortex                                │
+  │                                                         │
+  │  ┌─────────────────────┐    ┌────────────────────────┐ │
+  │  │  Control Plane       │    │  Data Plane             │ │
+  │  │  Phoenix Channels    │    │  gRPC Server            │ │
+  │  │  LiveView Dashboard  │    │  (port 4001)            │ │
+  │  │  (port 4000)         │    │                         │ │
+  │  │                      │    │  AgentGateway service    │ │
+  │  │  Operator WebSocket  │    │  - Register stream      │ │
+  │  │  Real-time UI        │    │  - Heartbeat            │ │
+  │  └─────────────────────┘    │  - TaskResult           │ │
+  │           │                  │  - StatusUpdate          │ │
+  │           │ PubSub           │  - PeerRequest           │ │
+  │           │                  └────────────────────────┘ │
+  │           ▼                            ▲                │
+  │  ┌─────────────────────┐               │                │
+  │  │  Gateway Registry    │◄──────────────┘                │
+  │  │  (shared state)      │                                │
+  │  └─────────────────────┘                                │
+  └─────────────────────────────────────────────────────────┘
+                                           │ gRPC
+                                           │
+  ┌────────────────────────────────────────┐│
+  │  Container / Machine                   ││
+  │                                        ││
+  │  ┌──────────┐      ┌───────────────┐  ││
+  │  │  Agent    │──────│   Sidecar     │──┘│
+  │  │  (LLM)   │ HTTP │   (Go binary) │   │
+  │  │          │:9090 │               │   │
+  │  └──────────┘      └───────────────┘   │
+  │                                        │
+  └────────────────────────────────────────┘
+  ```
+
+  ## Why gRPC Instead of Phoenix Channels
+
+  1. **Language-agnostic protocol** — protobuf schema generates clients in any language.
+     The sidecar can be Go, Rust, Python — all from the same `.proto` file.
+  2. **No Phoenix Channel wire protocol** — Phoenix Channels use a custom envelope
+     format (`[join_ref, ref, topic, event, payload]`) that non-Elixir clients must
+     reimplement. gRPC avoids this entirely.
+  3. **Typed contracts** — protobuf enforces schema at compile time. No JSON
+     serialization bugs or stringly-typed fields.
+  4. **Bidirectional streaming** — replaces both request/response and push patterns
+     in a single connection. Registration, heartbeats, task dispatch, and peer
+     requests all flow over one stream.
+  5. **Industry standard** — every serious service mesh uses gRPC (Envoy, Linkerd,
+     Dapr). Proven at scale.
+  6. **Separation of concerns** — Phoenix stays as the control plane (dashboard,
+     operator UI). gRPC is the data plane (agent communication).
+
+  ## Protobuf Service Definition (to be defined by Proto Engineer)
+
+  The `.proto` file defines the contract between sidecar and gateway:
+
+  ```protobuf
+  syntax = "proto3";
+  package cortex.gateway.v1;
+
+  service AgentGateway {
+    // Bidirectional stream — the main connection
+    // Agent sends: Register, Heartbeat, TaskResult, StatusUpdate
+    // Gateway sends: Registered, TaskRequest, PeerRequest
+    rpc Connect(stream AgentMessage) returns (stream GatewayMessage);
+  }
+
+  message AgentMessage {
+    oneof msg {
+      RegisterRequest register = 1;
+      Heartbeat heartbeat = 2;
+      TaskResult task_result = 3;
+      StatusUpdate status_update = 4;
+      PeerResponse peer_response = 5;
+    }
+  }
+
+  message GatewayMessage {
+    oneof msg {
+      RegisterResponse registered = 1;
+      TaskRequest task_request = 2;
+      PeerRequest peer_request = 3;
+      RosterUpdate roster_update = 4;
+      Error error = 5;
+    }
+  }
+
+  message RegisterRequest {
+    string name = 1;
+    string role = 2;
+    repeated string capabilities = 3;
+    string auth_token = 4;
+    map<string, string> metadata = 5;
+  }
+
+  message RegisterResponse {
+    string agent_id = 1;
+    int32 peer_count = 2;
+    string run_id = 3;
+  }
+
+  message Heartbeat {
+    string agent_id = 1;
+    string status = 2;  // idle, working, draining
+    int32 active_tasks = 3;
+    int32 queue_depth = 4;
+  }
+
+  message TaskRequest {
+    string task_id = 1;
+    string prompt = 2;
+    repeated string tools = 3;
+    int64 timeout_ms = 4;
+    map<string, string> context = 5;
+  }
+
+  message TaskResult {
+    string task_id = 1;
+    string status = 2;  // completed, failed, cancelled
+    string result_text = 3;
+    int64 duration_ms = 4;
+    int32 input_tokens = 5;
+    int32 output_tokens = 6;
+  }
+
+  message StatusUpdate {
+    string agent_id = 1;
+    string status = 2;
+    string detail = 3;
+    float progress = 4;
+  }
+
+  message PeerRequest {
+    string request_id = 1;
+    string from_agent = 2;
+    string capability = 3;
+    string prompt = 4;
+    int64 timeout_ms = 5;
+  }
+
+  message PeerResponse {
+    string request_id = 1;
+    string status = 2;
+    string result = 3;
+    int64 duration_ms = 4;
+  }
+
+  message RosterUpdate {
+    repeated AgentInfo agents = 1;
+  }
+
+  message AgentInfo {
+    string id = 1;
+    string name = 2;
+    string role = 3;
+    repeated string capabilities = 4;
+    string status = 5;
+    map<string, string> metadata = 6;
+  }
+
+  message Error {
+    string code = 1;
+    string message = 2;
+  }
+  ```
+
+  ## Sidecar Local HTTP API
+
+  The sidecar exposes a local HTTP/JSON API on port 9090 for the co-located agent.
+  This does NOT change from the original design — agents still call localhost:9090.
+
+  ### Mesh Queries
+  - `GET /health` — sidecar health check
+  - `GET /roster` — list all agents in the mesh
+  - `GET /roster/:agent_id` — get details for a specific agent
+  - `GET /roster/capable/:capability` — find agents by capability
+
+  ### Messaging
+  - `GET /messages` — get pending messages for this agent
+  - `POST /messages/:agent_id` — send a message to another agent
+  - `POST /broadcast` — broadcast a message to all agents
+
+  ### Agent-to-Agent Invocation
+  - `POST /ask/:agent_id` — invoke another agent synchronously
+  - `POST /ask/capable/:capability` — invoke by capability
+
+  ### Knowledge
+  - `GET /knowledge?topic=X` — query knowledge store
+  - `POST /knowledge` — publish a knowledge entry
+
+  ### Status
+  - `POST /status` — report progress to Cortex
+  - `GET /task` — get current task assignment
+  - `POST /task/result` — submit task result
+
+  ## Sidecar Configuration
+
+  Via environment variables (same as before):
+  - `CORTEX_GATEWAY_URL` — gRPC address (e.g., cortex:4001)
+  - `CORTEX_AGENT_NAME` — agent name for registration
+  - `CORTEX_AGENT_ROLE` — agent role description
+  - `CORTEX_AGENT_CAPABILITIES` — comma-separated capabilities
+  - `CORTEX_AUTH_TOKEN` — bearer token for gateway auth
+  - `CORTEX_SIDECAR_PORT` — local HTTP port (default: 9090)
+  - `CORTEX_HEARTBEAT_INTERVAL` — heartbeat interval in seconds (default: 15)
+
+  ## Existing Cortex Infrastructure (from Phase 1)
+
+  These Phase 1 modules stay as-is for the control plane. The gRPC server
+  writes to the same Gateway.Registry, emits the same PubSub events.
+
+  - `lib/cortex_web/channels/agent_socket.ex` — Phoenix Socket (control plane)
+  - `lib/cortex_web/channels/agent_channel.ex` — Phoenix Channel (control plane)
+  - `lib/cortex/gateway/registry.ex` — tracks connected agents (shared)
+  - `lib/cortex/gateway/registered_agent.ex` — agent struct (shared)
+  - `lib/cortex/gateway/protocol.ex` — message parsing (to be replaced by protobuf on data plane)
+  - `lib/cortex/gateway/auth.ex` — token authentication (shared)
+  - `lib/cortex/gateway/health.ex` — health monitoring (shared)
+
+  ## Tech Stack
+
+  - **Sidecar:** Go 1.22+
+  - **gRPC:** protobuf v3, `google.golang.org/grpc` (Go), `grpc` hex package (Elixir)
+  - **Proto codegen:** `buf` with `protoc-gen-go`, `protoc-gen-elixir`
+  - **Sidecar HTTP:** `chi` router (github.com/go-chi/chi) — lightweight, stdlib-compatible
+  - **Sidecar CLI:** `cobra` (github.com/spf13/cobra) — standard Go CLI framework
+  - **Sidecar config:** `envconfig` (github.com/kelseyhightower/envconfig) — declarative env var parsing
+  - **Sidecar logging:** `slog` (stdlib since Go 1.21) — structured logging
+  - **Gateway gRPC server:** `grpc` hex package in Elixir
+  - **Build:** `go build`; `docker build` for container
+
+  ## Go Library Choices (IMPORTANT — use these, don't hand-roll)
+
+  | Concern | Library | Why |
+  |---------|---------|-----|
+  | gRPC client | `google.golang.org/grpc` | Standard, battle-tested |
+  | gRPC reconnection | Built-in via `grpc.WithConnectParams` + keepalive | Do NOT reimplement — gRPC handles connection-level reconnect. Only handle stream re-establishment + re-registration. |
+  | HTTP router | `chi` (github.com/go-chi/chi) | Lightweight, stdlib-compatible, composable middleware |
+  | CLI | `cobra` (github.com/spf13/cobra) | Standard Go CLI framework, handles help/version/subcommands |
+  | Config | `envconfig` (github.com/kelseyhightower/envconfig) | Declarative env var parsing into structs with validation tags |
+  | Logging | `slog` (stdlib) | Structured logging, built into Go since 1.21 |
+  | Graceful shutdown | `signal.NotifyContext` (stdlib) | One-line signal handling with context cancellation |
+  | HTTP test server | `net/http/httptest` (stdlib) | Standard test HTTP server |
+  | JSON | `encoding/json` (stdlib) | No need for a third-party JSON library |
+
+  ## Coding Conventions
+
+  ### Elixir (gateway side)
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+
+  ### Go (sidecar)
+  - Exported types and functions have doc comments
+  - Error wrapping with `fmt.Errorf("context: %w", err)`
+  - Context propagation for cancellation/timeouts
+  - Table-driven tests
+  - No global state — dependency injection via structs
+  - Use `slog` for all logging (not `log` or `fmt.Println`)
+  - Use `envconfig` struct tags for config, not manual `os.Getenv` calls
+
+dependencies:
+  - docs/cluster-mode/PROJECT.md
+  - docs/cluster-mode/phase-1-agent-gateway/kickoff.yaml
+
+plans_dir: docs/cluster-mode/phase-2-sidecar/plans-v2
+content_dir: docs/cluster-mode/phase-2-sidecar/content
+
+teammates:
+  - role: "Proto & Codegen Engineer"
+    doc: proto-codegen.md
+    focus: |
+      Define the protobuf service contract and set up code generation for
+      both Elixir (gateway) and Go (sidecar).
+
+      Files to create:
+      - `proto/cortex/gateway/v1/gateway.proto` — service and message definitions
+        - AgentGateway service with bidirectional Connect stream
+        - All message types: Register, Heartbeat, TaskRequest, TaskResult,
+          StatusUpdate, PeerRequest, PeerResponse, RosterUpdate, Error
+        - Use proto3 with well-typed fields (no stringly-typed enums)
+        - Version the package: `cortex.gateway.v1`
+      - `proto/buf.yaml` — buf configuration (linting, breaking change detection)
+      - `proto/buf.gen.yaml` — code generation config
+        - Go output: `sidecar/internal/proto/`
+        - Elixir output: `lib/cortex/gateway/proto/`
+      - `Makefile` target: `make proto` — runs buf/protoc to generate code
+      - Generated Go code: `sidecar/internal/proto/gatewayv1/`
+      - Generated Elixir code: `lib/cortex/gateway/proto/`
+
+      Design notes:
+      - Use `buf` over raw `protoc` for better linting and dependency management
+      - The Connect RPC uses bidirectional streaming — one long-lived stream
+        per sidecar connection. Both sides send messages asynchronously.
+      - Use `oneof` for polymorphic message types (AgentMessage, GatewayMessage)
+      - Include a `reserved` block for future field IDs
+      - Auth token goes in the Register message (not gRPC metadata) for simplicity.
+        Can migrate to per-RPC credentials later.
+
+  - role: "Gateway gRPC Engineer"
+    doc: gateway-grpc.md
+    focus: |
+      Add a gRPC server to the Cortex gateway that implements the AgentGateway
+      service, writing to the existing Gateway.Registry and emitting PubSub events.
+
+      Files to create:
+      - `lib/cortex/gateway/grpc_server.ex` — gRPC service implementation
+        - Implement the `Connect` bidirectional stream handler
+        - On RegisterRequest: validate auth, create RegisteredAgent, add to Registry
+        - On Heartbeat: update agent health in Registry
+        - On TaskResult: emit PubSub event, route to task caller
+        - On StatusUpdate: update Registry, emit PubSub event
+        - On PeerResponse: route back to the requesting agent's stream
+        - Push TaskRequest, PeerRequest, RosterUpdate to the agent's stream
+        - Handle stream disconnect: unregister agent from Registry
+      - `lib/cortex/gateway/grpc_endpoint.ex` — gRPC endpoint configuration
+        - Start gRPC server on port 4001 (configurable)
+        - TLS optional (for dev, plaintext is fine)
+        - Add to the Gateway.Supervisor tree
+      - Extend `lib/cortex/gateway/registry.ex` to track gRPC stream pids
+        - Add `stream_pid` field to RegisteredAgent (alongside existing `channel_pid`)
+        - Add `get_stream(agent_id)` function for pushing messages to gRPC agents
+        - Reuse existing `Process.monitor` logic for automatic cleanup on stream death
+        - Do NOT create a separate StreamRegistry — extend what's already there
+      - `test/cortex/gateway/grpc_server_test.exs`
+
+      Integration:
+      - The gRPC server writes to the SAME Gateway.Registry as the Phoenix Channel.
+        An agent connected via gRPC and an agent connected via Phoenix Channel
+        appear identically in the registry.
+      - PubSub events are identical — the LiveView dashboard works with gRPC agents
+        without any changes.
+      - Gateway.Health monitors gRPC agents the same way (heartbeat timeout).
+
+      Design notes:
+      - Use the `grpc` hex package (https://hex.pm/packages/grpc)
+      - Each Connect stream runs as a process — use GenServer-like state tracking
+      - The stream process monitors the Gateway.Registry for roster changes and
+        pushes RosterUpdate messages to the sidecar proactively
+      - Auth: validate the token from RegisterRequest against Gateway.Auth module
+
+  - role: "Sidecar Core Engineer"
+    doc: sidecar-core.md
+    focus: |
+      Build the Go sidecar binary — gRPC client connection to Cortex, configuration,
+      state management, and auto-reconnect logic.
+
+      Directory: `sidecar/` (new Go module at the project root)
+
+      Files to create:
+      - `sidecar/go.mod` — Go module definition
+      - `sidecar/go.sum` — dependency lockfile
+      - `sidecar/cmd/cortex-sidecar/main.go` — cobra CLI entrypoint
+        - Root command with --version flag
+        - Reads config via envconfig
+        - Starts gRPC connection, HTTP server
+        - Uses signal.NotifyContext for graceful shutdown
+      - `sidecar/internal/config/config.go` — configuration
+        - Struct with `envconfig` tags for declarative env var parsing
+        - Required: GatewayURL, AgentName
+        - Defaults: Port=9090, HeartbeatInterval=15s, Role="agent"
+        - Validation via struct tags + custom Validate() method
+      - `sidecar/internal/gateway/client.go` — gRPC client
+        - Establish gRPC connection with `grpc.WithConnectParams` for built-in
+          connection-level reconnection (do NOT reimplement backoff)
+        - Open bidirectional Connect stream
+        - Send RegisterRequest on stream open
+        - Send periodic Heartbeat messages (use time.Ticker)
+        - Receive and dispatch GatewayMessages (TaskRequest, PeerRequest, RosterUpdate)
+        - Handle stream-level errors: re-open the stream and re-register
+          (the gRPC connection itself reconnects automatically)
+        - Expose methods for sending TaskResult, StatusUpdate, PeerResponse
+      - `sidecar/internal/state/state.go` — sidecar state
+        - Thread-safe state store (sync.RWMutex)
+        - Agent ID, connection status, cached roster, pending messages, current task
+        - Methods: GetRoster, GetMessages, PopMessages, GetTask, SetTask, etc.
+      - `sidecar/internal/gateway/client_test.go`
+      - `sidecar/internal/config/config_test.go`
+      - `sidecar/internal/state/state_test.go`
+      - `sidecar/Dockerfile` — multi-stage build (Go build → distroless)
+      - `sidecar/Makefile` — build, test, lint targets
+
+      Design notes:
+      - Use `google.golang.org/grpc` for the gRPC client
+      - Use `cobra` for CLI, `envconfig` for config, `slog` for logging
+      - Use `signal.NotifyContext` for graceful shutdown (one line, stdlib)
+      - gRPC handles connection-level reconnect automatically — do NOT
+        reimplement exponential backoff for the TCP/HTTP2 connection.
+        Only handle stream re-establishment: when the bidirectional stream
+        breaks, re-open it and re-send RegisterRequest.
+      - The gRPC stream runs in a goroutine; incoming messages are dispatched
+        to the state store. The HTTP handlers read from the state store.
+      - On stream reconnect, re-send RegisterRequest (new agent ID each time).
+
+  - role: "Sidecar HTTP API Engineer"
+    doc: sidecar-http-api.md
+    focus: |
+      Build the local HTTP/JSON API in Go that agents call to interact with
+      the mesh through the sidecar.
+
+      Files to create:
+      - `sidecar/internal/api/router.go` — HTTP router setup
+        - Mount all handlers
+        - JSON middleware (content-type, error formatting)
+        - Bind to localhost:CORTEX_SIDECAR_PORT
+      - `sidecar/internal/api/health.go` — GET /health
+      - `sidecar/internal/api/roster.go` — roster endpoints
+        - GET /roster — list all agents from cached state
+        - GET /roster/:agent_id — agent details
+        - GET /roster/capable/:capability — find by capability
+      - `sidecar/internal/api/messages.go` — messaging endpoints
+        - GET /messages — get pending messages
+        - POST /messages/:agent_id — send message (via gRPC stream)
+        - POST /broadcast — broadcast to all agents
+      - `sidecar/internal/api/invoke.go` — agent-to-agent invocation
+        - POST /ask/:agent_id — synchronous invocation
+        - POST /ask/capable/:capability — invoke by capability
+        - Blocks until response or timeout
+      - `sidecar/internal/api/knowledge.go` — knowledge endpoints
+        - GET /knowledge — query knowledge
+        - POST /knowledge — publish entry
+      - `sidecar/internal/api/status.go` — status and task endpoints
+        - POST /status — report progress
+        - GET /task — get current task
+        - POST /task/result — submit task result
+      - `sidecar/internal/api/*_test.go` — handler tests
+
+      Design notes:
+      - Use `chi` router (github.com/go-chi/chi) — stdlib-compatible, composable
+        middleware, clean URL param extraction
+      - Use `slog` for request logging middleware
+      - All endpoints return JSON with consistent error format:
+        `{"error": "message", "code": "CODE"}`
+      - /ask endpoints: send PeerRequest via the gRPC client, wait on a channel
+        for the response. Use context.WithTimeout for the blocking wait.
+      - Write endpoints check connection status first — return 503 if disconnected
+      - Handlers take dependencies (State, GatewayClient) via struct injection,
+        not globals
+      - Use `net/http/httptest` for handler tests (stdlib, no extra deps)
+
+  - role: "Integration Test Engineer"
+    doc: integration-test.md
+    focus: |
+      Build end-to-end tests that verify the full Go sidecar ↔ gRPC ↔ Elixir
+      gateway flow.
+
+      Files to create:
+      - `test/cortex/gateway/grpc_integration_test.exs` — Elixir-side integration tests
+        - Test: gRPC Connect stream opens, Register received, Registered sent back
+        - Test: Heartbeat received, Registry updated
+        - Test: Stream disconnects, agent removed from Registry
+        - Test: TaskRequest pushed via stream, agent receives it
+        - Test: TaskResult received via stream, PubSub event emitted
+        - Test: StatusUpdate received, Registry updated
+        - Test: PeerRequest routed between two gRPC streams
+        - Test: gRPC agents appear in LiveView (same PubSub events as Phoenix agents)
+        - Use a gRPC test client in Elixir to simulate the sidecar
+      - `sidecar/internal/integration_test.go` — Go-side integration tests
+        - Test: sidecar connects to a test gRPC server, registers, receives agent ID
+        - Test: sidecar sends heartbeats at configured interval
+        - Test: sidecar reconnects after connection drop
+        - Test: HTTP API /roster returns agents from cached state
+        - Test: HTTP API /ask sends PeerRequest and receives response
+        - Test: HTTP API /status sends StatusUpdate via gRPC
+        - Start a minimal gRPC test server in Go that echoes messages
+      - `test/support/grpc_helpers.ex` — Elixir test helpers
+        - Helper to start a gRPC test client
+        - Helper to assert gateway events from gRPC connections
+      - `sidecar/internal/testutil/mock_server.go` — Go mock gRPC server for tests
+
+      Design notes:
+      - Elixir-side tests verify the gateway gRPC server against the proto contract
+      - Go-side tests verify the sidecar client + HTTP API against a mock server
+      - Full end-to-end (Go sidecar → real Elixir gateway) can be tested via
+        `make integration-test` which starts the gateway and sidecar together
+      - Use async: false for Elixir integration tests (shared Registry state)

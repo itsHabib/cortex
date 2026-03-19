@@ -20,8 +20,8 @@ This unlocks:
 
 ## Definition of Done
 
-1. A Phoenix WebSocket gateway where agents connect and register with capabilities.
-2. A sidecar binary that agents run alongside themselves — it connects to Cortex, handles heartbeats, and exposes a local HTTP API the agent can call.
+1. A gRPC data-plane gateway where agents connect and register with capabilities (Phoenix WebSocket retained for control plane/UI).
+2. A Go sidecar binary that agents run alongside themselves — it connects to Cortex via gRPC, handles heartbeats, and exposes a local HTTP API the agent can call.
 3. Agent-to-agent tool use — any registered agent can invoke any other via the `ask_agent` tool.
 4. Capability-based discovery — agents query the mesh for peers by capability.
 5. Provider.External bridges the gateway into the Provider abstraction from Feature 1.
@@ -32,10 +32,11 @@ This unlocks:
 
 ## Key Components
 
-- **Agent Gateway** (`lib/cortex_web/channels/`) — Phoenix WebSocket channel for agent connections
-- **Gateway Registry** (`lib/cortex/gateway/`) — tracks connected agents, capabilities, health
-- **Registration Protocol** — message format for join, heartbeat, capability advertisement
-- **Sidecar** (`sidecar/`) — lightweight binary agents run locally, exposes HTTP API + Cortex WebSocket
+- **Control Plane** (`lib/cortex_web/`) — Phoenix Channels + LiveView for operator UI and dashboard
+- **Data Plane** (`lib/cortex/gateway/grpc_server.ex`) — gRPC server for agent connections
+- **Proto Contract** (`proto/cortex/gateway/v1/`) — protobuf service and message definitions
+- **Gateway Registry** (`lib/cortex/gateway/`) — tracks connected agents, capabilities, health (shared by control + data plane)
+- **Sidecar** (`sidecar/`) — Go binary, gRPC client + local HTTP API for agents
 - **Provider.External** (`lib/cortex/provider/external.ex`) — Provider implementation for external agents
 - **Agent Tool** (`lib/cortex/tool/agent_tool.ex`) — tool that routes invocations to other agents
 - **Capability Discovery** (`lib/cortex/gateway/discovery.ex`) — find agents by capability
@@ -44,11 +45,14 @@ This unlocks:
 
 ## Tech Stack
 
-- **Language:** Elixir (gateway, registry, provider), Go or Elixir escript (sidecar)
-- **Framework:** Phoenix Channels (WebSocket gateway)
-- **Protocol:** JSON over WebSocket (agent ↔ Cortex), HTTP (agent ↔ sidecar)
+- **Language:** Elixir (gateway, registry, provider), Go (sidecar)
+- **Control Plane:** Phoenix Channels + LiveView (operator UI, dashboard)
+- **Data Plane:** gRPC bidirectional streaming (agent ↔ Cortex gateway)
+- **Protocol:** Protobuf v3 (`cortex.gateway.v1`) — typed, versioned, generates clients in any language
+- **Sidecar ↔ Agent:** HTTP/JSON on localhost (agent calls sidecar REST API)
 - **Auth:** Bearer tokens for gateway registration (simple, extensible later)
-- **Testing:** ExUnit, WebSocket test clients
+- **Build:** `buf`/`protoc` for proto codegen, `go build` for sidecar binary
+- **Testing:** ExUnit (Elixir), `go test` (Go), gRPC test clients
 
 ---
 
@@ -65,8 +69,8 @@ This unlocks:
 ## Constraints
 
 - Must integrate with the Provider/SpawnBackend abstractions from the Compute Spawning feature
-- Gateway must handle hundreds of concurrent WebSocket connections
-- Sidecar must be a single binary with zero dependencies (easy to deploy in any container)
+- Gateway must handle hundreds of concurrent gRPC streams
+- Sidecar is a Go binary (natural fit for infrastructure sidecars, first-class gRPC support)
 - Registration protocol must be versioned from day one (future-proofing)
 - Agent-to-agent calls must have timeout and depth limits (prevent infinite recursion)
 
@@ -76,15 +80,18 @@ This unlocks:
 
 | Role | Focus |
 |------|-------|
-| Gateway Architect | Phoenix WebSocket channel for agent connections |
-| Registry Engineer | Agent registry with capabilities, health tracking |
-| Protocol Engineer | Registration, heartbeat, and messaging protocol |
-| Sidecar Engineer | Sidecar binary — Cortex connection + local HTTP API |
-| Sidecar API Engineer | Local HTTP endpoints the agent calls (messages, roster, knowledge) |
-| External Provider Engineer | Provider.External implementation |
-| Agent Tool Engineer | Agent-to-agent tool use (ask_agent tool) |
-| Discovery Engineer | Capability-based agent discovery and routing |
-| Dashboard Engineer | Mesh visualization and external agent monitoring |
+| Gateway Architect | Phoenix WebSocket channel for control plane (Phase 1) |
+| Registry Engineer | Agent registry with capabilities, health tracking (Phase 1) |
+| Protocol Engineer | Registration, heartbeat, and messaging protocol (Phase 1) |
+| Proto & Codegen Engineer | Protobuf service definition + code generation pipeline |
+| Gateway gRPC Engineer | gRPC data-plane server in Elixir |
+| Sidecar Core Engineer | Go sidecar binary — gRPC client, config, reconnect |
+| Sidecar HTTP API Engineer | Go local HTTP endpoints for agents |
+| Integration Test Engineer | End-to-end gRPC + sidecar tests |
+| External Provider Engineer | Provider.External implementation (Phase 3) |
+| Agent Tool Engineer | Agent-to-agent tool use (Phase 3) |
+| Discovery Engineer | Capability-based agent discovery and routing (Phase 3) |
+| Dashboard Engineer | Mesh visualization and external agent monitoring (Phase 3) |
 
 ---
 
@@ -92,8 +99,8 @@ This unlocks:
 
 | Phase | Config | Goal |
 |-------|--------|------|
-| Agent Gateway | docs/cluster-mode/phase-1-agent-gateway/kickoff.yaml | WebSocket gateway, registry, registration protocol |
-| Sidecar | docs/cluster-mode/phase-2-sidecar/kickoff.yaml | Sidecar binary with local HTTP API and Cortex connection |
+| Agent Gateway | docs/cluster-mode/phase-1-agent-gateway/kickoff.yaml | Phoenix WebSocket gateway, registry, registration protocol (control plane) |
+| Sidecar + gRPC | docs/cluster-mode/phase-2-sidecar/kickoff-v2-grpc.yaml | gRPC data plane, Go sidecar binary, proto contract, local HTTP API |
 | Agent Mesh | docs/cluster-mode/phase-3-agent-mesh/kickoff.yaml | Agent-to-agent tool use, capability discovery, Provider.External |
 
 ---
