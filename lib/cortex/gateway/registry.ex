@@ -140,6 +140,41 @@ defmodule Cortex.Gateway.Registry do
   end
 
   @doc """
+  Registers a new external agent connected via gRPC.
+
+  Similar to `register/3` but uses a gRPC stream process pid instead of
+  a Phoenix Channel pid. Sets `transport: :grpc` and `stream_pid` on the agent.
+  """
+  @spec register_grpc(GenServer.server(), map(), pid()) ::
+          {:ok, RegisteredAgent.t()} | {:error, term()}
+  def register_grpc(server \\ __MODULE__, agent_info, stream_pid) do
+    GenServer.call(server, {:register_grpc, agent_info, stream_pid})
+  end
+
+  @doc """
+  Returns the gRPC stream pid for the given agent.
+
+  Returns `{:ok, stream_pid}` for gRPC agents, `{:error, :not_found}` if the
+  agent does not exist or is not a gRPC agent.
+  """
+  @spec get_stream(GenServer.server(), String.t()) :: {:ok, pid()} | {:error, :not_found}
+  def get_stream(server \\ __MODULE__, agent_id) do
+    GenServer.call(server, {:get_stream, agent_id})
+  end
+
+  @doc """
+  Returns the appropriate push pid for the given agent, regardless of transport.
+
+  Returns `{:ok, {transport, pid}}` where transport is `:websocket` or `:grpc`,
+  or `{:error, :not_found}` if the agent does not exist.
+  """
+  @spec get_push_pid(GenServer.server(), String.t()) ::
+          {:ok, {RegisteredAgent.transport(), pid()}} | {:error, :not_found}
+  def get_push_pid(server \\ __MODULE__, agent_id) do
+    GenServer.call(server, {:get_push_pid, agent_id})
+  end
+
+  @doc """
   Routes a completed task result.
 
   This is a placeholder for Phase 3 orchestration integration. Currently a no-op
@@ -186,6 +221,7 @@ defmodule Cortex.Gateway.Registry do
         capabilities: Map.get(agent_info, "capabilities"),
         status: :idle,
         channel_pid: channel_pid,
+        transport: :websocket,
         monitor_ref: monitor_ref,
         metadata: Map.get(agent_info, "metadata", %{}),
         registered_at: now,
@@ -296,6 +332,70 @@ defmodule Cortex.Gateway.Registry do
     case Map.get(state.agents, agent_id) do
       nil -> {:reply, {:error, :not_found}, state}
       agent -> {:reply, {:ok, agent.channel_pid}, state}
+    end
+  end
+
+  def handle_call({:register_grpc, agent_info, stream_pid}, _from, state) do
+    with :ok <- validate_agent_info(agent_info),
+         true <- is_pid(stream_pid) and Process.alive?(stream_pid) do
+      id = Ecto.UUID.generate()
+      now = DateTime.utc_now()
+      monitor_ref = Process.monitor(stream_pid)
+
+      agent = %RegisteredAgent{
+        id: id,
+        name: Map.get(agent_info, "name"),
+        role: Map.get(agent_info, "role"),
+        capabilities: Map.get(agent_info, "capabilities"),
+        status: :idle,
+        stream_pid: stream_pid,
+        transport: :grpc,
+        monitor_ref: monitor_ref,
+        metadata: Map.get(agent_info, "metadata", %{}),
+        registered_at: now,
+        last_heartbeat: now,
+        load: %{active_tasks: 0, queue_depth: 0}
+      }
+
+      new_agents = Map.put(state.agents, id, agent)
+      new_monitors = Map.put(state.monitors, monitor_ref, id)
+      new_state = %{state | agents: new_agents, monitors: new_monitors}
+
+      safe_broadcast(:agent_registered, %{
+        agent_id: id,
+        name: agent.name,
+        role: agent.role,
+        capabilities: agent.capabilities
+      })
+
+      {:reply, {:ok, agent}, new_state}
+    else
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+
+      false ->
+        {:reply, {:error, :invalid_stream_pid}, state}
+    end
+  end
+
+  def handle_call({:get_stream, agent_id}, _from, state) do
+    case Map.get(state.agents, agent_id) do
+      nil -> {:reply, {:error, :not_found}, state}
+      %{stream_pid: nil} -> {:reply, {:error, :not_found}, state}
+      agent -> {:reply, {:ok, agent.stream_pid}, state}
+    end
+  end
+
+  def handle_call({:get_push_pid, agent_id}, _from, state) do
+    case Map.get(state.agents, agent_id) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      %{transport: :grpc, stream_pid: pid} ->
+        {:reply, {:ok, {:grpc, pid}}, state}
+
+      %{transport: :websocket, channel_pid: pid} ->
+        {:reply, {:ok, {:websocket, pid}}, state}
     end
   end
 

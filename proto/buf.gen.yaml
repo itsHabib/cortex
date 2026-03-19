@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  # Go protobuf message types
+  - protoc_builtin: go
+    out: ../sidecar/internal/proto/gatewayv1
+    opt: paths=source_relative
+  # Go gRPC service stubs
+  - protoc_builtin: go-grpc
+    out: ../sidecar/internal/proto/gatewayv1
+    opt: paths=source_relative

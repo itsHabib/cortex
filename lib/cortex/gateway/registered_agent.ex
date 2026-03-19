@@ -1,10 +1,10 @@
 defmodule Cortex.Gateway.RegisteredAgent do
   @moduledoc """
-  Struct representing an externally connected agent registered via the WebSocket gateway.
+  Struct representing an externally connected agent registered via the gateway.
 
-  Tracks the agent's identity, capabilities, health state, and the Phoenix Channel
-  process that owns the connection. This is distinct from `Cortex.Mesh.Member`, which
-  tracks locally-spawned agents in a mesh cluster.
+  Tracks the agent's identity, capabilities, health state, and the connection
+  process (Phoenix Channel or gRPC stream). This is distinct from `Cortex.Mesh.Member`,
+  which tracks locally-spawned agents in a mesh cluster.
 
   ## Fields
 
@@ -13,8 +13,10 @@ defmodule Cortex.Gateway.RegisteredAgent do
     - `role` — the agent's role description
     - `capabilities` — list of capability tags (e.g. `["security-review", "cve-lookup"]`)
     - `status` — lifecycle status: `:idle`, `:working`, `:draining`, or `:disconnected`
-    - `channel_pid` — the Phoenix Channel process pid for this connection
-    - `monitor_ref` — `Process.monitor` reference for the channel pid
+    - `channel_pid` — the Phoenix Channel process pid (nil for gRPC agents)
+    - `stream_pid` — the gRPC stream process pid (nil for WebSocket agents)
+    - `transport` — `:websocket` or `:grpc`
+    - `monitor_ref` — `Process.monitor` reference for the connection pid
     - `metadata` — arbitrary key-value metadata (model, provider, max_concurrent, etc.)
     - `registered_at` — UTC timestamp of registration
     - `last_heartbeat` — UTC timestamp of last heartbeat (or registration time initially)
@@ -22,20 +24,24 @@ defmodule Cortex.Gateway.RegisteredAgent do
 
   """
 
-  @enforce_keys [:id, :name, :role, :capabilities, :channel_pid, :monitor_ref]
+  @enforce_keys [:id, :name, :role, :capabilities, :monitor_ref]
   defstruct [
     :id,
     :name,
     :role,
     :capabilities,
     :channel_pid,
+    :stream_pid,
     :monitor_ref,
     :registered_at,
     :last_heartbeat,
     status: :idle,
+    transport: :websocket,
     metadata: %{},
     load: %{active_tasks: 0, queue_depth: 0}
   ]
+
+  @type transport :: :websocket | :grpc
 
   @type status :: :idle | :working | :draining | :disconnected
 
@@ -45,7 +51,9 @@ defmodule Cortex.Gateway.RegisteredAgent do
           role: String.t(),
           capabilities: [String.t()],
           status: status(),
-          channel_pid: pid(),
+          channel_pid: pid() | nil,
+          stream_pid: pid() | nil,
+          transport: transport(),
           monitor_ref: reference(),
           metadata: map(),
           registered_at: DateTime.t() | nil,

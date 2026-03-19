@@ -21,6 +21,10 @@ config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
+config :cortex, Cortex.Gateway.GrpcEndpoint,
+  port: 4001,
+  start_server: true
+
 config :phoenix, :json_library, Jason
 
 config :tailwind, :version, "4.1.12"

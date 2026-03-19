@@ -1,0 +1,248 @@
+// Cortex Agent Gateway — gRPC service contract.
+//
+// This proto defines the bidirectional streaming RPC between the Go sidecar
+// and the Elixir gateway. Both sides generate typed stubs from this single
+// source of truth.
+//
+// Package: cortex.gateway.v1
+// Go package: gatewayv1
+syntax = "proto3";
+
+package cortex.gateway.v1;
+
+option go_package = "github.com/cortex/sidecar/internal/proto/gatewayv1";
+
+// AgentGateway is the data-plane service for agent mesh connectivity.
+// Agents connect via a long-lived bidirectional stream. The first message
+// from the agent MUST be a RegisterRequest.
+service AgentGateway {
+  // Connect opens a bidirectional stream between a sidecar and the gateway.
+  // The first AgentMessage MUST be a RegisterRequest.
+  // The gateway responds with RegisterResponse, then both sides exchange
+  // messages asynchronously for the lifetime of the connection.
+  rpc Connect(stream AgentMessage) returns (stream GatewayMessage);
+}
+
+// AgentStatus represents the operational state of an agent.
+enum AgentStatus {
+  // Default zero value — must not be used as a real status.
+  AGENT_STATUS_UNSPECIFIED = 0;
+  // Agent is idle and available for work.
+  AGENT_STATUS_IDLE = 1;
+  // Agent is actively working on a task.
+  AGENT_STATUS_WORKING = 2;
+  // Agent is draining — finishing current work, not accepting new tasks.
+  AGENT_STATUS_DRAINING = 3;
+  // Agent has disconnected from the gateway.
+  AGENT_STATUS_DISCONNECTED = 4;
+}
+
+// TaskStatus represents the outcome of a completed task.
+enum TaskStatus {
+  // Default zero value — must not be used as a real status.
+  TASK_STATUS_UNSPECIFIED = 0;
+  // Task completed successfully.
+  TASK_STATUS_COMPLETED = 1;
+  // Task failed.
+  TASK_STATUS_FAILED = 2;
+  // Task was cancelled.
+  TASK_STATUS_CANCELLED = 3;
+}
+
+// AgentMessage is the envelope for all agent-to-gateway messages.
+// Exactly one of the oneof fields must be set.
+message AgentMessage {
+  oneof msg {
+    // Registration request — must be the first message on the stream.
+    RegisterRequest register = 1;
+    // Periodic heartbeat to keep the agent alive in the registry.
+    Heartbeat heartbeat = 2;
+    // Result of a completed/failed task.
+    TaskResult task_result = 3;
+    // Progress update from the agent.
+    StatusUpdate status_update = 4;
+    // Response to a peer invocation.
+    PeerResponse peer_response = 5;
+    // Direct message to a specific agent (gateway routes by to_agent).
+    DirectMessage direct_message = 6;
+    // Broadcast message to all agents.
+    BroadcastRequest broadcast = 7;
+  }
+}
+
+// GatewayMessage is the envelope for all gateway-to-agent messages.
+// Exactly one of the oneof fields must be set.
+message GatewayMessage {
+  oneof msg {
+    // Registration confirmation with assigned agent ID.
+    RegisterResponse registered = 1;
+    // Task assignment from Cortex.
+    TaskRequest task_request = 2;
+    // Peer invocation from another agent.
+    PeerRequest peer_request = 3;
+    // Mesh membership change notification.
+    RosterUpdate roster_update = 4;
+    // Protocol-level error.
+    Error error = 5;
+    // Delivered direct message from another agent.
+    DirectMessage direct_message = 6;
+  }
+}
+
+// RegisterRequest is sent by the agent as the first message on the stream.
+message RegisterRequest {
+  // Human-readable agent name. Must be non-empty.
+  string name = 1;
+  // Agent role description.
+  string role = 2;
+  // Advertised capabilities for capability-based routing.
+  repeated string capabilities = 3;
+  // Bearer token for authentication. Must be non-empty.
+  string auth_token = 4;
+  // Extensible key-value metadata.
+  map<string, string> metadata = 5;
+}
+
+// RegisterResponse is sent by the gateway after successful registration.
+message RegisterResponse {
+  // Assigned agent UUID.
+  string agent_id = 1;
+  // Current number of agents in the mesh.
+  int32 peer_count = 2;
+  // Active run ID, if any. Empty string if no run is active.
+  string run_id = 3;
+}
+
+// Heartbeat is sent periodically by the agent to maintain its health status.
+message Heartbeat {
+  // Agent ID assigned during registration.
+  string agent_id = 1;
+  // Current operational status.
+  AgentStatus status = 2;
+  // Number of tasks currently being processed.
+  int32 active_tasks = 3;
+  // Number of tasks queued locally.
+  int32 queue_depth = 4;
+}
+
+// TaskRequest is sent by the gateway to assign work to an agent.
+message TaskRequest {
+  // Unique task identifier.
+  string task_id = 1;
+  // Task prompt or instructions.
+  string prompt = 2;
+  // Tools available to the agent for this task.
+  repeated string tools = 3;
+  // Task timeout in milliseconds.
+  int64 timeout_ms = 4;
+  // Contextual key-value pairs (run_id, team, upstream results, etc.).
+  map<string, string> context = 5;
+}
+
+// TaskResult is sent by the agent when a task completes or fails.
+message TaskResult {
+  // Task identifier matching the original TaskRequest.
+  string task_id = 1;
+  // Outcome status.
+  TaskStatus status = 2;
+  // Result text or error message.
+  string result_text = 3;
+  // Time spent on the task in milliseconds.
+  int64 duration_ms = 4;
+  // Number of input tokens consumed.
+  int32 input_tokens = 5;
+  // Number of output tokens produced.
+  int32 output_tokens = 6;
+}
+
+// StatusUpdate is sent by the agent to report progress.
+message StatusUpdate {
+  // Agent ID assigned during registration.
+  string agent_id = 1;
+  // Current operational status.
+  AgentStatus status = 2;
+  // Human-readable progress description.
+  string detail = 3;
+  // Progress fraction from 0.0 to 1.0.
+  float progress = 4;
+}
+
+// PeerRequest is sent by the gateway to invoke this agent on behalf of another.
+message PeerRequest {
+  // Unique request identifier for correlating with PeerResponse.
+  string request_id = 1;
+  // Agent ID of the requesting agent.
+  string from_agent = 2;
+  // Capability being invoked.
+  string capability = 3;
+  // Prompt or instructions for the invocation.
+  string prompt = 4;
+  // Timeout in milliseconds.
+  int64 timeout_ms = 5;
+}
+
+// PeerResponse is sent by the agent in response to a PeerRequest.
+message PeerResponse {
+  // Request identifier matching the original PeerRequest.
+  string request_id = 1;
+  // Outcome status.
+  TaskStatus status = 2;
+  // Result text.
+  string result = 3;
+  // Time spent in milliseconds.
+  int64 duration_ms = 4;
+}
+
+// RosterUpdate is sent by the gateway when mesh membership changes.
+message RosterUpdate {
+  // Current list of all agents in the mesh.
+  repeated AgentInfo agents = 1;
+}
+
+// AgentInfo describes a single agent in the mesh roster.
+message AgentInfo {
+  // Agent UUID.
+  string id = 1;
+  // Human-readable name.
+  string name = 2;
+  // Agent role description.
+  string role = 3;
+  // Advertised capabilities.
+  repeated string capabilities = 4;
+  // Current operational status.
+  AgentStatus status = 5;
+  // Extensible key-value metadata.
+  map<string, string> metadata = 6;
+}
+
+// DirectMessage is used for agent-to-agent messaging.
+// Appears in both AgentMessage (agent sends to gateway for routing)
+// and GatewayMessage (gateway delivers to target agent).
+message DirectMessage {
+  // Unique message identifier.
+  string message_id = 1;
+  // Target agent ID. Set by the sending agent; empty for broadcast delivery.
+  string to_agent = 2;
+  // Sender agent ID. Set by the gateway on delivery.
+  string from_agent = 3;
+  // Message body.
+  string content = 4;
+  // Unix timestamp in milliseconds.
+  int64 timestamp = 5;
+}
+
+// BroadcastRequest sends a message to all connected agents.
+// The gateway delivers it as DirectMessage to each agent except the sender.
+message BroadcastRequest {
+  // Message body.
+  string content = 1;
+}
+
+// Error represents a protocol-level error from the gateway.
+// Fatal errors may be followed by stream closure.
+message Error {
+  // Machine-readable error code (e.g., "AUTH_FAILED", "INVALID_MESSAGE").
+  string code = 1;
+  // Human-readable error description.
+  string message = 2;
+}

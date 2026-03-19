@@ -45,6 +45,10 @@ defmodule Cortex.MixProject do
       {:floki, ">= 0.30.0", only: :test},
       {:lazy_html, ">= 0.1.0", only: :test},
 
+      # Phase 2: gRPC data plane
+      {:grpc, "~> 0.9"},
+      {:protobuf, "~> 0.13"},
+
       # Phase 9: Performance
       {:benchee, "~> 1.3", only: :dev},
 

@@ -331,4 +331,128 @@ defmodule Cortex.Gateway.RegistryTest do
       assert :ok = Registry.route_task_result("task-123", %{"text" => "result"})
     end
   end
+
+  # -- register_grpc/3 --
+
+  describe "register_grpc/3" do
+    test "registers a gRPC agent with stream_pid and transport :grpc", %{registry: reg} do
+      stream_pid = spawn_channel()
+      info = make_agent_info("grpc-agent")
+      assert {:ok, %RegisteredAgent{} = agent} = Registry.register_grpc(reg, info, stream_pid)
+      assert agent.stream_pid == stream_pid
+      assert agent.channel_pid == nil
+      assert agent.transport == :grpc
+      assert agent.name == "grpc-agent"
+      assert agent.status == :idle
+    end
+
+    test "returns error for dead stream pid", %{registry: reg} do
+      dead_pid = spawn(fn -> :ok end)
+      Process.sleep(10)
+      info = make_agent_info()
+      assert {:error, :invalid_stream_pid} = Registry.register_grpc(reg, info, dead_pid)
+    end
+
+    test "broadcasts :agent_registered event", %{registry: reg} do
+      Cortex.Events.subscribe()
+      stream_pid = spawn_channel()
+      {:ok, agent} = Registry.register_grpc(reg, make_agent_info("grpc-evt"), stream_pid)
+
+      assert_receive %{
+                       type: :agent_registered,
+                       payload: %{agent_id: agent_id, name: "grpc-evt"}
+                     },
+                     1000
+
+      assert agent_id == agent.id
+    end
+  end
+
+  # -- get_stream/2 --
+
+  describe "get_stream/2" do
+    test "returns stream pid for gRPC agent", %{registry: reg} do
+      stream_pid = spawn_channel()
+      {:ok, agent} = Registry.register_grpc(reg, make_agent_info("grpc"), stream_pid)
+      assert {:ok, ^stream_pid} = Registry.get_stream(reg, agent.id)
+    end
+
+    test "returns {:error, :not_found} for WS agent", %{registry: reg} do
+      channel = spawn_channel()
+      {:ok, agent} = Registry.register(reg, make_agent_info("ws"), channel)
+      assert {:error, :not_found} = Registry.get_stream(reg, agent.id)
+    end
+
+    test "returns {:error, :not_found} for unknown ID", %{registry: reg} do
+      assert {:error, :not_found} = Registry.get_stream(reg, "nonexistent")
+    end
+  end
+
+  # -- get_push_pid/2 --
+
+  describe "get_push_pid/2" do
+    test "returns {:grpc, pid} for gRPC agent", %{registry: reg} do
+      stream_pid = spawn_channel()
+      {:ok, agent} = Registry.register_grpc(reg, make_agent_info("grpc"), stream_pid)
+      assert {:ok, {:grpc, ^stream_pid}} = Registry.get_push_pid(reg, agent.id)
+    end
+
+    test "returns {:websocket, pid} for WS agent", %{registry: reg} do
+      channel = spawn_channel()
+      {:ok, agent} = Registry.register(reg, make_agent_info("ws"), channel)
+      assert {:ok, {:websocket, ^channel}} = Registry.get_push_pid(reg, agent.id)
+    end
+
+    test "returns {:error, :not_found} for unknown ID", %{registry: reg} do
+      assert {:error, :not_found} = Registry.get_push_pid(reg, "nonexistent")
+    end
+  end
+
+  # -- monitor-based cleanup (gRPC) --
+
+  describe "monitor-based cleanup (gRPC)" do
+    test "auto-removes gRPC agent when stream pid dies", %{registry: reg} do
+      stream_pid = spawn_channel()
+      {:ok, agent} = Registry.register_grpc(reg, make_agent_info("grpc"), stream_pid)
+      assert Registry.count(reg) == 1
+
+      Process.exit(stream_pid, :kill)
+      Process.sleep(50)
+
+      assert Registry.count(reg) == 0
+      assert {:error, :not_found} = Registry.get(reg, agent.id)
+    end
+
+    test "emits :agent_unregistered event on stream pid death", %{registry: reg} do
+      Cortex.Events.subscribe()
+      stream_pid = spawn_channel()
+      {:ok, _agent} = Registry.register_grpc(reg, make_agent_info("grpc-down"), stream_pid)
+
+      assert_receive %{type: :agent_registered}, 1000
+
+      Process.exit(stream_pid, :kill)
+
+      assert_receive %{
+                       type: :agent_unregistered,
+                       payload: %{name: "grpc-down", reason: :channel_down}
+                     },
+                     1000
+    end
+  end
+
+  # -- mixed transport listing --
+
+  describe "mixed transport listing" do
+    test "list/1 returns both WS and gRPC agents", %{registry: reg} do
+      ws_channel = spawn_channel()
+      grpc_stream = spawn_channel()
+      {:ok, _} = Registry.register(reg, make_agent_info("ws-agent"), ws_channel)
+      {:ok, _} = Registry.register_grpc(reg, make_agent_info("grpc-agent"), grpc_stream)
+
+      agents = Registry.list(reg)
+      assert length(agents) == 2
+      transports = Enum.map(agents, & &1.transport) |> Enum.sort()
+      assert transports == [:grpc, :websocket]
+    end
+  end
 end

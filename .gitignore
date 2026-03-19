@@ -46,3 +46,4 @@ cortex-*.tar
 /test-plan.md
 /test-strategy.md
 /tokens-rest.txt
+sidecar/bin/

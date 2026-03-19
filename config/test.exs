@@ -12,4 +12,7 @@ config :cortex, CortexWeb.Endpoint,
   secret_key_base: "test_secret_key_base_that_is_at_least_64_bytes_long_for_testing_only_ok_ok",
   server: false
 
+# Disable gRPC server in test — tests that need it start their own
+config :cortex, Cortex.Gateway.GrpcEndpoint, start_server: false
+
 config :logger, level: :warning
