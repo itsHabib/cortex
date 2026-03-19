@@ -1,9 +1,9 @@
-defmodule CortexWeb.DashboardLiveTest do
+defmodule CortexWeb.OverviewLiveTest do
   use CortexWeb.ConnCase
 
-  test "renders dashboard page", %{conn: conn} do
+  test "renders overview page", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
-    assert html =~ "Dashboard"
+    assert html =~ "Overview"
     assert html =~ "Total Runs"
     assert html =~ "Active Runs"
     assert html =~ "Total Tokens"

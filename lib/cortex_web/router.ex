@@ -33,19 +33,28 @@ defmodule CortexWeb.Router do
     end
   end
 
+  # -- Legacy redirects --
   scope "/", CortexWeb do
     pipe_through(:browser)
 
-    live("/", DashboardLive, :index)
-    live("/runs", RunListLive, :index)
-    live("/runs/compare", RunCompareLive, :index)
+    get("/gossip", RedirectController, :gossip)
+    get("/mesh", RedirectController, :mesh)
+    get("/cluster", RedirectController, :cluster)
+    get("/jobs", RedirectController, :jobs)
+    get("/runs/compare", RedirectController, :runs_compare)
+  end
+
+  # -- New route table: 4 top-level pages --
+  scope "/", CortexWeb do
+    pipe_through(:browser)
+
+    live("/", OverviewLive, :index)
+    live("/agents", AgentsLive, :index)
+    live("/agents/:id", AgentsLive, :show)
+    live("/workflows", WorkflowsLive, :index)
+    live("/runs", RunsLive, :index)
     live("/runs/:id", RunDetailLive, :show)
     live("/runs/:id/teams/:name", TeamDetailLive, :show)
-    live("/workflows", NewRunLive, :index)
-    live("/gossip", GossipLive, :index)
-    live("/mesh", MeshLive, :index)
-    live("/cluster", ClusterLive, :index)
-    live("/jobs", JobsLive, :index)
   end
 
   # Enable LiveDashboard in development

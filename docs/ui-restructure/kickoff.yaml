@@ -1,0 +1,131 @@
+phase: "UI Restructure"
+
+goal: >
+  Redesign the Cortex web UI from 7 nav items organized around implementation concepts
+  to 4 items organized around user intent (Overview, Agents, Workflows, Runs). Consolidate
+  overlapping pages, kill standalone protocol viewers, and establish the product identity
+  as a multi-agent control plane — not a protocol simulator.
+
+system_context: |
+  Elixir/Phoenix LiveView app with dark-mode Tailwind CSS UI. Currently 10 LiveView pages
+  behind 7 sidebar nav items: Dashboard, Runs, Workflows, Gossip, Mesh, Cluster, Jobs.
+
+  Backend has 3 coordination modes (DAG workflow, Mesh, Gossip), a Gateway for external
+  agents via gRPC/WebSocket sidecars, and SQLite persistence via Ecto. The backend is
+  stable and does NOT need changes — this phase is purely web layer restructure.
+
+  Key files:
+  - Router: lib/cortex_web/router.ex
+  - Layouts: lib/cortex_web/layouts/root.html.heex, app.html.heex
+  - LiveViews: lib/cortex_web/live/ (10 modules, RunDetailLive is 4,400 LOC)
+  - Components: lib/cortex_web/components/ (core_components.ex, dag_components.ex)
+  - DAG layout helper: lib/cortex_web/live/helpers/dag_layout.ex
+
+  Current routes:
+    /                        → DashboardLive
+    /runs                    → RunListLive
+    /runs/compare            → RunCompareLive
+    /runs/:id                → RunDetailLive (7 internal tabs)
+    /runs/:id/teams/:name    → TeamDetailLive
+    /workflows               → NewRunLive
+    /gossip                  → GossipLive (908 LOC)
+    /mesh                    → MeshLive (1,099 LOC)
+    /cluster                 → ClusterLive (254 LOC)
+    /jobs                    → JobsLive (323 LOC)
+
+  Production mental model: agents are deployed (via sidecar in k8s or locally), users
+  compose workflows from their agent pool, pick a coordination mode, launch runs, and
+  monitor execution. The coordination mode (DAG/Mesh/Gossip) is a property of a run,
+  not a top-level navigation destination.
+
+dependencies:
+  - CLAUDE.md
+
+plans_dir: docs/ui-restructure/plans
+content_dir: docs/ui-restructure/content
+
+teammates:
+  - role: "Information Architect"
+    doc: information-architecture.md
+    focus: |
+      Design the new navigation structure and page hierarchy. Specifically:
+      - Define the 4 top-level nav items (Overview, Agents, Workflows, Runs) and their routes
+      - Map every current page/feature to its new home (what merges, what gets killed, what stays)
+      - Define the URL scheme (e.g., /agents, /agents/:id, /runs/:id, /workflows/new)
+      - Specify what each page shows at a high level (not component details, just information hierarchy)
+      - Handle edge cases: where do protocol-specific views live? (gossip topology in run detail vs agents page)
+      - Define the sidebar layout and any secondary navigation (tabs within pages)
+      - Consider deep-linking: how do users share a link to a specific team's logs in a run?
+      - Migration path: can we redirect old routes to new ones during transition?
+
+  - role: "Agents Page Designer"
+    doc: agents-page.md
+    focus: |
+      Design the new unified Agents page that merges Cluster, Mesh topology, and agent discovery.
+      This is the "fleet dashboard" — the foundational view of what's connected and available.
+      - Agent grid/list showing all connected agents (gateway + local) with: name, capabilities,
+        transport type (gRPC/WS/local), status, health, last heartbeat
+      - Capability-based filtering and search ("show me agents that can do code-review")
+      - Agent detail panel/view: status, recent work history, messages, capabilities, config
+      - Topology visualization mode: when agents are in a mesh, show the connectivity graph
+        (adapted from current MeshLive topology viz)
+      - How to represent agent groups/clusters vs individual agents
+      - Real-time updates: agent connect/disconnect, status changes, heartbeat freshness
+      - Empty state: no agents connected yet — guide user to deploy sidecars or start local agents
+      - Consider: should this page show agents currently busy in a run? Link to the run?
+
+  - role: "Workflows Page Designer"
+    doc: workflows-page.md
+    focus: |
+      Evolve the current NewRunLive into the primary entry point for composing and launching work.
+      This page answers "I want to get something done" — not "I want to paste YAML."
+      - Two paths to create a workflow:
+        1. YAML-first: paste or load from file (exists today, keep it)
+        2. Visual composition: pick agents from pool by capability, set dependencies, choose mode
+      - Coordination mode selector: DAG (structured dependencies), Mesh (autonomous + messaging),
+        Gossip (knowledge sharing). Each mode shows relevant config options.
+      - Agent picker: select from connected agents, filter by capability, drag into workflow
+      - DAG builder: for DAG mode, visual dependency graph editor (or at minimum, dependency config)
+      - Validation and preview before launch (exists today, enhance it)
+      - Workspace path configuration
+      - Consider: saved workflow templates? Recent workflows? Quick re-run?
+      - Consider: what's the minimal viable version vs the full vision? Phase this if needed.
+
+  - role: "Runs Consolidation Designer"
+    doc: runs-consolidation.md
+    focus: |
+      Consolidate RunList + RunDetail + RunCompare + TeamDetail + Jobs into one coherent runs flow.
+      This is the monitoring and inspection surface — where users spend most of their time.
+      - Run list: keep the current list but add mode indicator (DAG/Mesh/Gossip icon), fold
+        Compare into a view mode or filter rather than a separate page
+      - Run detail: the 4,400 LOC monster needs restructuring. Key decisions:
+        - Which tabs are universal vs mode-specific?
+        - DAG runs: show tier graph, team dependencies, sequential progress
+        - Mesh runs: show member states, message flow, autonomous progress
+        - Gossip runs: show knowledge propagation, convergence rounds, topology
+        - Where do coordinator/debug-agent Jobs go? (Fold into run detail, not separate page)
+      - Team detail: keep as drill-down from run detail, but consider making it a slide-over
+        panel instead of a separate page (reduces nav depth)
+      - Cost/token comparison: becomes a column sort or filter on the run list, not a separate page
+      - Consider: run grouping? (multiple runs for the same project)
+      - Consider: what actions are available? (stop, resume, retry, delete)
+
+  - role: "Component Architect"
+    doc: component-system.md
+    focus: |
+      Design the shared component system that the new pages will use. The current codebase has
+      core_components.ex and dag_components.ex — this needs to expand for the restructured UI.
+      - Agent card component: used in Agents page grid, Workflow agent picker, Run team list.
+        Shows name, capabilities, status, transport type. Multiple display modes (grid, list, compact).
+      - Mode selector component: DAG/Mesh/Gossip picker with visual indicators and config panels
+      - Topology visualizer: generalized from current Mesh/Gossip topology SVG rendering.
+        Used in Agents page (live topology) and Run detail (execution topology).
+      - Status system: unify the various status representations (agent status, run status, team status)
+        into a consistent component set with clear color coding
+      - Activity feed component: used in multiple pages (dashboard, run detail, agents).
+        Generalize the current activity feed pattern.
+      - Log viewer component: extract from RunDetailLive's massive render. Reusable for
+        team logs, coordinator logs, job logs.
+      - Cost/token display components: already exist but review for consistency across new pages
+      - Consider: component composition patterns, slot-based vs prop-based, HEEx component conventions
+      - Consider: accessibility (keyboard nav, screen readers, focus management)

@@ -92,188 +92,77 @@ defmodule CortexWeb.CoreComponents do
   end
 
   @doc """
-  Renders a colored status badge.
+  Renders a slide-over panel that slides in from the right edge.
+
+  Used for detail panels (e.g., team detail in Runs page).
 
   ## Examples
 
-      <.status_badge status="running" />
-      <.status_badge status="completed" />
+      <.slide_over show={@show_panel} on_close="close_panel" title="Details">
+        Panel content here
+      </.slide_over>
   """
-  attr(:status, :string, required: true)
+  attr(:show, :boolean, default: false)
+  attr(:on_close, :string, default: nil)
+  attr(:title, :string, default: nil)
+  attr(:id, :string, default: "slide-over")
+  attr(:class, :string, default: nil)
 
-  def status_badge(assigns) do
+  slot(:inner_block, required: true)
+
+  def slide_over(assigns) do
     ~H"""
-    <span class={[
-      "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
-      status_color(@status)
-    ]}>
-      {@status}
-    </span>
-    """
-  end
-
-  defp status_color("pending"), do: "bg-gray-700 text-gray-300"
-  defp status_color("running"), do: "bg-blue-900/60 text-blue-300 ring-1 ring-blue-500/30"
-
-  defp status_color("completed"),
-    do: "bg-emerald-900/60 text-emerald-300 ring-1 ring-emerald-500/30"
-
-  defp status_color("done"), do: "bg-emerald-900/60 text-emerald-300 ring-1 ring-emerald-500/30"
-  defp status_color("failed"), do: "bg-rose-900/60 text-rose-300 ring-1 ring-rose-500/30"
-  defp status_color("stopped"), do: "bg-orange-900/60 text-orange-300 ring-1 ring-orange-500/30"
-  defp status_color("stalled"), do: "bg-yellow-900/60 text-yellow-300 ring-1 ring-yellow-500/30"
-  defp status_color(_), do: "bg-gray-700 text-gray-300"
-
-  @doc """
-  Formats and displays token counts (input/output).
-
-  ## Examples
-
-      <.token_display input={16584} output={45} />
-      <.token_display input={nil} output={nil} />
-  """
-  attr(:input, :integer, default: nil)
-  attr(:output, :integer, default: nil)
-
-  def token_display(assigns) do
-    ~H"""
-    <span class="text-sm font-mono text-gray-300">
-      {format_token_pair(@input, @output)}
-    </span>
-    """
-  end
-
-  @doc """
-  Click-to-expand token breakdown showing cache details.
-
-  Shows compact "in / out" by default. Click to reveal:
-  input, cache read, cache creation, and output.
-
-  ## Examples
-
-      <.token_detail
-        input={16584}
-        output={45}
-        cache_read={12000}
-        cache_creation={3000}
-      />
-  """
-  attr(:input, :integer, default: nil)
-  attr(:output, :integer, default: nil)
-  attr(:cache_read, :integer, default: nil)
-  attr(:cache_creation, :integer, default: nil)
-  attr(:id, :string, required: true)
-
-  def token_detail(assigns) do
-    combined_input =
-      (assigns.input || 0) + (assigns.cache_read || 0) + (assigns.cache_creation || 0)
-
-    assigns = assign(assigns, :combined_input, combined_input)
-
-    ~H"""
-    <span class="relative inline-block">
-      <button
-        phx-click={JS.toggle(to: "##{@id}-detail")}
-        class="text-sm font-mono text-gray-300 hover:text-cortex-300 transition-colors cursor-pointer"
-        title="Click for token breakdown"
-      >
-        {format_token_pair(@combined_input, @output)}
-      </button>
+    <div
+      :if={@show}
+      id={@id}
+      class="fixed inset-0 z-40 overflow-hidden"
+      aria-labelledby={"#{@id}-title"}
+      role="dialog"
+      aria-modal="true"
+    >
+      <%!-- Backdrop --%>
       <div
-        id={"#{@id}-detail"}
-        class="hidden absolute z-20 top-full left-0 mt-1 bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-xl min-w-[200px]"
-        phx-click-away={JS.hide(to: "##{@id}-detail")}
-      >
-        <div class="space-y-1.5 text-xs font-mono">
-          <div class="flex justify-between gap-4">
-            <span class="text-gray-500">Input</span>
-            <span class="text-gray-300">{format_token_count(@input)}</span>
-          </div>
-          <div class="flex justify-between gap-4">
-            <span class="text-gray-500">Cache Read</span>
-            <span class="text-emerald-400">{format_token_count(@cache_read)}</span>
-          </div>
-          <div class="flex justify-between gap-4">
-            <span class="text-gray-500">Cache Create</span>
-            <span class="text-yellow-400">{format_token_count(@cache_creation)}</span>
-          </div>
-          <div class="border-t border-gray-700 pt-1.5 flex justify-between gap-4">
-            <span class="text-gray-500">Output</span>
-            <span class="text-gray-300">{format_token_count(@output)}</span>
+        class="absolute inset-0 bg-black/50 transition-opacity"
+        phx-click={@on_close}
+        aria-hidden="true"
+      />
+
+      <%!-- Panel --%>
+      <div class="absolute inset-y-0 right-0 flex max-w-full pl-10">
+        <div class={[
+          "w-screen max-w-md transform transition-transform",
+          @class
+        ]}>
+          <div class="h-full bg-gray-900 border-l border-gray-800 shadow-xl flex flex-col">
+            <%!-- Header --%>
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+              <h2
+                :if={@title}
+                id={"#{@id}-title"}
+                class="text-lg font-semibold text-white"
+              >
+                {@title}
+              </h2>
+              <button
+                :if={@on_close}
+                phx-click={@on_close}
+                class="text-gray-500 hover:text-gray-300 transition-colors"
+                aria-label="Close panel"
+              >
+                &#x2715;
+              </button>
+            </div>
+
+            <%!-- Content --%>
+            <div class="flex-1 overflow-y-auto p-4">
+              {render_slot(@inner_block)}
+            </div>
           </div>
         </div>
       </div>
-    </span>
+    </div>
     """
   end
-
-  defp format_token_count(nil), do: "0"
-  defp format_token_count(0), do: "0"
-  defp format_token_count(n) when is_integer(n) and n < 1_000, do: Integer.to_string(n)
-
-  defp format_token_count(n) when is_integer(n) do
-    value = n / 1_000
-    formatted = :erlang.float_to_binary(value, decimals: 1)
-
-    formatted =
-      if String.ends_with?(formatted, ".0") do
-        String.trim_trailing(formatted, ".0")
-      else
-        formatted
-      end
-
-    "#{formatted}K"
-  end
-
-  defp format_token_count(_), do: "0"
-
-  defp format_token_pair(nil, nil), do: "--"
-
-  defp format_token_pair(input, output) do
-    "#{format_token_count(input)} in / #{format_token_count(output)} out"
-  end
-
-  @doc """
-  Formats and displays duration from milliseconds.
-
-  ## Examples
-
-      <.duration_display ms={123456} />
-      <.duration_display ms={nil} />
-  """
-  attr(:ms, :integer, default: nil)
-
-  def duration_display(assigns) do
-    ~H"""
-    <span class="text-sm font-mono text-gray-300">
-      {format_duration(@ms)}
-    </span>
-    """
-  end
-
-  defp format_duration(nil), do: "--"
-
-  defp format_duration(ms) when is_integer(ms) do
-    cond do
-      ms < 1_000 ->
-        "#{ms}ms"
-
-      ms < 60_000 ->
-        "#{Float.round(ms / 1_000, 1)}s"
-
-      ms < 3_600_000 ->
-        minutes = div(ms, 60_000)
-        seconds = div(rem(ms, 60_000), 1_000)
-        "#{minutes}m #{seconds}s"
-
-      true ->
-        hours = div(ms, 3_600_000)
-        minutes = div(rem(ms, 3_600_000), 60_000)
-        "#{hours}h #{minutes}m"
-    end
-  end
-
-  defp format_duration(_), do: "--"
 
   @doc """
   JS command to hide an element.

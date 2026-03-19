@@ -1,7 +1,7 @@
-defmodule CortexWeb.RunListLiveTest do
+defmodule CortexWeb.RunsLiveTest do
   use CortexWeb.ConnCase
 
-  test "renders run list page", %{conn: conn} do
+  test "renders runs page", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/runs")
     assert html =~ "Runs"
     assert html =~ "All runs"

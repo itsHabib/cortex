@@ -1,0 +1,57 @@
+phase: "UI Restructure — Wave 1 (Foundations)"
+
+goal: >
+  Implement the two foundation pieces for the UI restructure: new route/nav structure
+  (Information Architecture) and shared component system. These must land before the
+  three page implementations (Agents, Workflows, Runs) can begin.
+
+system_context: |
+  Elixir/Phoenix LiveView app with dark-mode Tailwind CSS UI. Currently 10 LiveView pages
+  behind 7 sidebar nav items: Dashboard, Runs, Workflows, Gossip, Mesh, Cluster, Jobs.
+
+  Backend has 3 coordination modes (DAG workflow, Mesh, Gossip), a Gateway for external
+  agents via gRPC/WebSocket sidecars, and SQLite persistence via Ecto. The backend is
+  stable and does NOT need changes — this phase is purely web layer restructure.
+
+  Key files:
+  - Router: lib/cortex_web/router.ex
+  - Layouts: lib/cortex_web/layouts/root.html.heex, app.html.heex
+  - LiveViews: lib/cortex_web/live/ (10 modules, RunDetailLive is 4,400 LOC)
+  - Components: lib/cortex_web/components/ (core_components.ex, dag_components.ex)
+  - DAG layout helper: lib/cortex_web/live/helpers/dag_layout.ex
+
+  Important: Do NOT pipe `mix test` to tail, grep, or any other command — it hangs forever.
+
+dependencies:
+  - CLAUDE.md
+  - docs/ui-restructure/plans/information-architecture.md
+  - docs/ui-restructure/plans/component-system.md
+
+plans_dir: docs/ui-restructure/plans
+content_dir: docs/ui-restructure/content
+
+teammates:
+  - role: "Information Architecture Engineer"
+    doc: information-architecture.md
+    focus: |
+      Implement the Information Architecture plan. Execute tasks 1-6 from the plan doc:
+      1. Router + Sidebar + Redirects — new route table, 4-item sidebar, legacy redirects
+      2. Rename LiveView modules (DashboardLive→OverviewLive, NewRunLive→WorkflowsLive, RunListLive→RunsLive, ClusterLive→AgentsLive)
+      3. Merge RunCompareLive into RunsLive as view toggle
+      4. Extract gossip/mesh components from standalone LiveViews
+      5. Integrate protocol views into RunDetailLive + kill JobsLive
+      6. Unify workflow launch flow for all coordination modes
+      Write tests for all route redirects and LiveView mounts.
+
+  - role: "Component System Engineer"
+    doc: component-system.md
+    focus: |
+      Implement the Component System plan. Execute tasks 1-7 from the plan doc:
+      1. StatusComponents + TokenComponents (foundation layer)
+      2. TopologyComponents + layout helpers
+      3. AgentComponents (including agent_picker)
+      4. FeedComponents + LogComponents
+      5. ModeComponents + GossipComponents + MeshComponents + slide_over + import wiring
+      6. Migrate existing pages to shared components
+      7. Accessibility pass
+      Write comprehensive tests for every component module.

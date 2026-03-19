@@ -1,0 +1,79 @@
+phase: "UI Restructure — Wave 2 (Pages)"
+
+goal: >
+  Implement the three new page designs: Agents fleet dashboard, Workflows multi-mode
+  composer, and Runs consolidation (RunDetailLive tab extraction + inline compare).
+  All shared components from Wave 1 are available — use them.
+
+system_context: |
+  Elixir/Phoenix LiveView app with dark-mode Tailwind CSS UI. Wave 1 is complete:
+  - Router has 4 top-level routes (/, /agents, /workflows, /runs) + legacy redirects
+  - 9 shared component modules available (auto-imported in CortexWeb):
+    StatusComponents, TokenComponents, TopologyComponents, AgentComponents,
+    FeedComponents, LogComponents, ModeComponents, GossipComponents, MeshComponents
+  - CoreComponents has slide_over/1
+  - LiveView renames done: OverviewLive, AgentsLive, WorkflowsLive, RunsLive exist
+  - Old files deleted: GossipLive, MeshLive, ClusterLive, JobsLive, etc.
+
+  Key files:
+  - Router: lib/cortex_web/router.ex (already has /agents, /workflows, /runs routes)
+  - Layouts: lib/cortex_web/layouts/root.html.heex (4-item sidebar done)
+  - New LiveViews: lib/cortex_web/live/agents_live.ex, workflows_live.ex, runs_live.ex
+  - Components: lib/cortex_web/components/ (9 modules, all auto-imported)
+  - Run detail: lib/cortex_web/live/run_detail_live.ex (4,400 LOC — needs extraction)
+
+  Important: Do NOT pipe `mix test` to tail, grep, or any other command — it hangs forever.
+
+dependencies:
+  - CLAUDE.md
+  - docs/ui-restructure/plans/agents-page.md
+  - docs/ui-restructure/plans/workflows-page.md
+  - docs/ui-restructure/plans/runs-consolidation.md
+
+plans_dir: docs/ui-restructure/plans
+content_dir: docs/ui-restructure/content
+
+teammates:
+  - role: "Agents Page Engineer"
+    doc: agents-page.md
+    focus: |
+      Implement the Agents page plan. Execute tasks 1-6:
+      1. Scaffold AgentsLive with mount, routes, and empty state
+      2. Agent grid/list rendering with real-time PubSub updates
+      3. Search, filtering, and capability discovery
+      4. Agent detail slide-over panel with URL routing (/agents/:id)
+      5. Topology visualization mode
+      6. Grouping, sidebar update, and final polish
+      Use shared components: AgentComponents (agent_card, agent_grid, agent_list, agent_picker),
+      StatusComponents (status_badge, transport_badge), TopologyComponents (topology_graph).
+      AgentsLive already exists from Wave 1 rename — enhance it.
+
+  - role: "Workflows Page Engineer"
+    doc: workflows-page.md
+    focus: |
+      Implement the Workflows page plan. Execute tasks 1-7:
+      1. Scaffold WorkflowsLive with mode selector (DAG/Mesh/Gossip)
+      2. Extract mode panels (dag_panel.ex, mesh_panel.ex, gossip_panel.ex)
+      3. Extract shared launcher and wire up all three launch flows
+      4. Add agent picker and visual composition toggle
+      5. DAG visual builder (team editor + dependency graph)
+      6. Quick-start templates and polish
+      7. Cleanup — remove old standalone pages (already done in Wave 1, verify)
+      Use shared components: ModeComponents (mode_selector), AgentComponents (agent_picker),
+      StatusComponents, TopologyComponents (for DAG preview).
+      WorkflowsLive already exists from Wave 1 rename — enhance it.
+
+  - role: "Runs Consolidation Engineer"
+    doc: runs-consolidation.md
+    focus: |
+      Implement the Runs Consolidation plan. Execute tasks 1-6:
+      1. Extract tab components from RunDetailLive into run_detail/ directory
+      2. Add mode-conditional tab bar (visible_tabs/1)
+      3. Replace TeamDetailLive with slide-over panel
+      4. Fold RunCompareLive into RunListLive (already done in Wave 1, enhance)
+      5. Remove standalone JobsLive and add mode icon component (already done, verify)
+      6. Add tests for new components and consolidated flows
+      Use shared components: StatusComponents, FeedComponents (activity_feed),
+      LogComponents (log_viewer), TokenComponents, TopologyComponents,
+      GossipComponents, MeshComponents, CoreComponents (slide_over).
+      RunDetailLive is 4,400 LOC — extract into 11 tab modules under run_detail/.

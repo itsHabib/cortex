@@ -65,6 +65,15 @@ defmodule CortexWeb do
     quote do
       import Phoenix.HTML
       import CortexWeb.CoreComponents
+      import CortexWeb.StatusComponents
+      import CortexWeb.TokenComponents, except: [format_token_count: 1, format_number: 1]
+      import CortexWeb.TopologyComponents
+      import CortexWeb.AgentComponents
+      import CortexWeb.FeedComponents
+      import CortexWeb.LogComponents
+      import CortexWeb.ModeComponents
+      import CortexWeb.GossipComponents
+      import CortexWeb.MeshComponents
 
       alias Phoenix.LiveView.JS
 

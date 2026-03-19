@@ -1,4 +1,11 @@
-defmodule CortexWeb.DashboardLive do
+defmodule CortexWeb.OverviewLive do
+  @moduledoc """
+  System overview page showing at-a-glance health metrics.
+
+  Renamed from DashboardLive. Displays stat cards (total runs, active runs,
+  total tokens, connected agents) and a recent runs table.
+  """
+
   use CortexWeb, :live_view
 
   @impl true
@@ -23,7 +30,7 @@ defmodule CortexWeb.DashboardLive do
        total_output_tokens: total_output,
        active_count: active_count,
        connected_agents: connected_agents,
-       page_title: "Dashboard"
+       page_title: "Overview"
      )}
   end
 
@@ -56,11 +63,11 @@ defmodule CortexWeb.DashboardLive do
   def render(assigns) do
     ~H"""
     <.header>
-      Dashboard
+      Overview
       <:subtitle>Overview of orchestration runs and system status</:subtitle>
       <:actions>
         <a
-          href="/runs/compare"
+          href="/runs?view=compare"
           class="inline-flex items-center rounded-md bg-gray-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-600"
         >
           Compare Runs
@@ -180,6 +187,7 @@ defmodule CortexWeb.DashboardLive do
   defp format_time(_), do: "--"
 
   defp mode_class("gossip"), do: "bg-purple-900/50 text-purple-300"
+  defp mode_class("mesh"), do: "bg-emerald-900/50 text-emerald-300"
   defp mode_class(_), do: "bg-gray-800/50 text-gray-400"
 
   defp compute_total_tokens(runs) do

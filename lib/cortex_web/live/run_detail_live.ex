@@ -1,7 +1,18 @@
 defmodule CortexWeb.RunDetailLive do
   use CortexWeb, :live_view
 
-  import CortexWeb.DAGComponents
+  import CortexWeb.RunDetail.OverviewTab
+  import CortexWeb.RunDetail.ActivityTab
+  import CortexWeb.RunDetail.MessagesTab
+  import CortexWeb.RunDetail.LogsTab
+  import CortexWeb.RunDetail.DiagnosticsTab
+  import CortexWeb.RunDetail.SummariesTab
+  import CortexWeb.RunDetail.JobsTab
+  import CortexWeb.RunDetail.SettingsTab
+  import CortexWeb.RunDetail.GraphTab
+  import CortexWeb.RunDetail.MembershipTab
+  import CortexWeb.RunDetail.KnowledgeTab
+  import CortexWeb.RunDetail.TeamSlideOver
 
   alias Cortex.InternalAgent.Debug
   alias Cortex.InternalAgent.Summary
@@ -13,6 +24,7 @@ defmodule CortexWeb.RunDetailLive do
   alias Cortex.Orchestration.Runner
   alias Cortex.Orchestration.Spawner
   alias Cortex.Orchestration.Workspace
+  alias CortexWeb.RunDetail.Helpers
 
   require Logger
 
@@ -72,7 +84,11 @@ defmodule CortexWeb.RunDetailLive do
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => ""},
-           expanded_activities: MapSet.new()
+           expanded_activities: MapSet.new(),
+           team_panel_open: false,
+           panel_team_run: nil,
+           panel_log: nil,
+           panel_diagnostics: nil
          )}
 
       run ->
@@ -130,7 +146,11 @@ defmodule CortexWeb.RunDetailLive do
            pid_status: %{},
            editing_name: false,
            name_form: %{"name" => run.name || ""},
-           expanded_activities: MapSet.new()
+           expanded_activities: MapSet.new(),
+           team_panel_open: false,
+           panel_team_run: nil,
+           panel_log: nil,
+           panel_diagnostics: nil
          )}
         |> tap(fn _ -> maybe_start_pid_check(run, socket) end)
     end
@@ -1312,6 +1332,37 @@ defmodule CortexWeb.RunDetailLive do
      )}
   end
 
+  # -- Event handlers: team slide-over panel --
+
+  def handle_event("open_team_panel", %{"team" => team_name}, socket) do
+    run = socket.assigns.run
+
+    team_run =
+      Enum.find(socket.assigns.team_runs, fn tr -> tr.team_name == team_name end)
+
+    panel_log = read_team_log(run, team_name)
+    team_status = get_team_status(socket.assigns.team_runs, team_name)
+    panel_diagnostics = load_diagnostics(run, team_name, team_status: team_status)
+
+    {:noreply,
+     assign(socket,
+       team_panel_open: true,
+       panel_team_run: team_run,
+       panel_log: panel_log,
+       panel_diagnostics: panel_diagnostics
+     )}
+  end
+
+  def handle_event("close_team_panel", _params, socket) do
+    {:noreply,
+     assign(socket,
+       team_panel_open: false,
+       panel_team_run: nil,
+       panel_log: nil,
+       panel_diagnostics: nil
+     )}
+  end
+
   # -- Render --
 
   @impl true
@@ -1352,15 +1403,15 @@ defmodule CortexWeb.RunDetailLive do
           <span class="ml-2 text-gray-400">
             <.token_detail
               id="run-tokens"
-              input={sum_team_field(@team_runs, :input_tokens)}
-              output={sum_team_field(@team_runs, :output_tokens)}
-              cache_read={sum_team_field(@team_runs, :cache_read_tokens)}
-              cache_creation={sum_team_field(@team_runs, :cache_creation_tokens)}
+              input={Helpers.sum_team_field(@team_runs, :input_tokens)}
+              output={Helpers.sum_team_field(@team_runs, :output_tokens)}
+              cache_read={Helpers.sum_team_field(@team_runs, :cache_read_tokens)}
+              cache_creation={Helpers.sum_team_field(@team_runs, :cache_creation_tokens)}
             />
           </span>
           <span class="ml-2 text-gray-400">
             <%= if @run.status in ["running", "pending"] and @run.started_at do %>
-              {elapsed_since(@run.started_at)}
+              {Helpers.elapsed_since(@run.started_at)}
             <% else %>
               <.duration_display ms={@run.total_duration_ms} />
             <% end %>
@@ -1389,16 +1440,16 @@ defmodule CortexWeb.RunDetailLive do
         </:actions>
       </.header>
 
-      <!-- Resume Banner (visible across all tabs when stalled teams detected) -->
-      <%= if has_stalled_teams?(@team_runs, @run.status, @last_seen, @pid_status) do %>
+      <%!-- Resume Banner --%>
+      <%= if Helpers.has_stalled_teams?(@team_runs, @run.status, @last_seen, @pid_status) do %>
         <div class="bg-yellow-900/30 border border-yellow-800 rounded-lg p-4 mb-6">
           <div class="flex items-center justify-between mb-2">
             <div>
-              <p class="text-yellow-300 font-medium">Stalled {participant_label(@run, :lower_plural)} detected</p>
+              <p class="text-yellow-300 font-medium">Stalled {Helpers.participant_label(@run, :lower_plural)} detected</p>
               <p class="text-yellow-200/70 text-sm">
-                {count_stalled(@team_runs, @last_seen, @pid_status)} {participant_label(@run, :singular)}(s) show as "running" but have no live PID and no events in over 5 minutes:
+                {Helpers.count_stalled(@team_runs, @last_seen, @pid_status)} {Helpers.participant_label(@run, :singular)}(s) show as "running" but have no live PID and no events in over 5 minutes:
                 <span class="font-mono">
-                  {stalled_team_names(@team_runs, @last_seen, @pid_status) |> Enum.join(", ")}
+                  {Helpers.stalled_team_names(@team_runs, @last_seen, @pid_status) |> Enum.join(", ")}
                 </span>
               </p>
             </div>
@@ -1424,13 +1475,13 @@ defmodule CortexWeb.RunDetailLive do
         </div>
       <% end %>
 
-      <!-- Continue Run Banner (visible when run is interrupted with incomplete teams) -->
+      <%!-- Continue Run Banner --%>
       <% incomplete = incomplete_team_names(@run, @team_runs) %>
       <%= if incomplete != [] and @run.status in ["running", "failed"] and not @coordinator_alive do %>
         <div class="bg-blue-900/30 border border-blue-800 rounded-lg p-4 mb-6">
           <div class="flex items-center justify-between">
             <div>
-              <p class="text-blue-300 font-medium">Run interrupted — {length(incomplete)} incomplete {participant_label(@run, :singular)}(s)</p>
+              <p class="text-blue-300 font-medium">Run interrupted — {length(incomplete)} incomplete {Helpers.participant_label(@run, :singular)}(s)</p>
               <p class="text-blue-200/70 text-sm">
                 The coordinator process died before all tiers completed.
                 Remaining: <span class="font-mono">{Enum.join(incomplete, ", ")}</span>
@@ -1454,10 +1505,10 @@ defmodule CortexWeb.RunDetailLive do
         </div>
       <% end %>
 
-      <!-- Tab Bar -->
+      <%!-- Mode-Conditional Tab Bar --%>
       <div class="flex border-b border-gray-800 mb-6">
         <button
-          :for={tab <- ~w(overview activity messages logs summaries diagnostics jobs settings)}
+          :for={tab <- visible_tabs(@run)}
           phx-click="switch_tab"
           phx-value-tab={tab}
           class={[
@@ -1472,1235 +1523,117 @@ defmodule CortexWeb.RunDetailLive do
         </button>
       </div>
 
-      <!-- ============ Overview Tab ============ -->
+      <%!-- Tab Content --%>
       <div :if={@current_tab == "overview"}>
-        <!-- Coordinator + Status Summary -->
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-          <div
-            phx-click="toggle_coordinator"
-            class={[
-              "bg-gray-900 rounded-lg border p-3 text-center cursor-pointer hover:bg-gray-800/50 transition-colors",
-              if(@coordinator_alive, do: "border-green-900", else: "border-gray-800"),
-              if(@coordinator_expanded, do: "ring-1 ring-cortex-500/30", else: "")
-            ]}
-          >
-            <p class="text-xs text-gray-500 uppercase">Coordinator</p>
-            <%= if @coordinator_alive do %>
-              <p class="text-lg font-bold text-green-300">Alive</p>
-              <button
-                :if={@run}
-                phx-click="stop_coordinator"
-                class="mt-1 text-xs text-red-400 hover:text-red-300 underline"
-              >
-                Stop
-              </button>
-            <% else %>
-              <p class="text-lg font-bold text-gray-500">Dead</p>
-              <button
-                :if={@run && @run.workspace_path}
-                phx-click="start_coordinator"
-                class="mt-1 text-xs text-cortex-400 hover:text-cortex-300 underline"
-              >
-                Start
-              </button>
-            <% end %>
-            <p class="text-xs text-gray-600 mt-1">{if @coordinator_expanded, do: "click to collapse", else: "click to expand"}</p>
-          </div>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-3 text-center">
-            <p class="text-xs text-gray-500 uppercase">Pending</p>
-            <p class="text-lg font-bold text-gray-400">{count_by_status(@team_runs, "pending")}</p>
-          </div>
-          <div class="bg-gray-900 rounded-lg border border-blue-900 p-3 text-center">
-            <p class="text-xs text-blue-400 uppercase">Running</p>
-            <p class="text-lg font-bold text-blue-300">{count_active_running(@team_runs, @last_seen, @pid_status)}</p>
-          </div>
-          <div class="bg-gray-900 rounded-lg border border-yellow-900 p-3 text-center">
-            <p class="text-xs text-yellow-400 uppercase">Stalled</p>
-            <p class="text-lg font-bold text-yellow-300">{count_stalled(@team_runs, @last_seen, @pid_status)}</p>
-          </div>
-          <div class="bg-gray-900 rounded-lg border border-green-900 p-3 text-center">
-            <p class="text-xs text-green-400 uppercase">Done</p>
-            <p class="text-lg font-bold text-green-300">{count_by_status(@team_runs, ["completed", "done"])}</p>
-          </div>
-          <div class="bg-gray-900 rounded-lg border border-red-900 p-3 text-center">
-            <p class="text-xs text-red-400 uppercase">Failed</p>
-            <p class="text-lg font-bold text-red-300">{count_by_status(@team_runs, "failed")}</p>
-          </div>
-        </div>
-
-        <!-- Coordinator Detail (expanded) -->
-        <div :if={@coordinator_expanded} class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Coordinator Detail</h2>
-            <button
-              phx-click="refresh_coordinator"
-              class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-            >
-              Refresh
-            </button>
-          </div>
-
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <!-- Coordinator Log -->
-            <div>
-              <h3 class="text-xs font-medium text-gray-500 uppercase mb-2">
-                Log ({if @coordinator_log, do: length(@coordinator_log), else: 0} lines)
-              </h3>
-              <%= if @coordinator_log && @coordinator_log != [] do %>
-                <div class="max-h-[40vh] overflow-y-auto rounded bg-gray-950 p-3 space-y-0.5">
-                  <div :for={line <- Enum.take(@coordinator_log, -100)} class="text-xs font-mono text-gray-400">
-                    <span :if={line.type} class={["rounded px-1 py-0.5 mr-1 text-xs", log_type_class(line.type)]}>
-                      {line.type}
-                    </span>
-                    <span class="break-all">{truncate(line.raw, 200)}</span>
-                  </div>
-                </div>
-              <% else %>
-                <p class="text-gray-500 text-sm">No coordinator log found.</p>
-              <% end %>
-            </div>
-
-            <!-- Coordinator Messages -->
-            <div>
-              <h3 class="text-xs font-medium text-gray-500 uppercase mb-2">
-                Inbox ({length(@coordinator_inbox)})
-              </h3>
-              <%= if @coordinator_inbox != [] do %>
-                <div class="max-h-[40vh] overflow-y-auto space-y-2">
-                  <div :for={msg <- @coordinator_inbox} class="bg-gray-950 rounded p-2 text-xs">
-                    <span class="text-cortex-400">from: {Map.get(msg, "from", "?")}</span>
-                    <span class="text-gray-500 ml-2">{Map.get(msg, "timestamp", "")}</span>
-                    <p class="text-gray-300 mt-1">{truncate(Map.get(msg, "content", ""), 200)}</p>
-                  </div>
-                </div>
-              <% else %>
-                <p class="text-gray-500 text-sm">No messages yet.</p>
-              <% end %>
-            </div>
-          </div>
-        </div>
-
-        <%= if non_dag?(@run) do %>
-          <!-- Gossip Info (gossip mode only) -->
-          <% gossip_info = if(gossip?(@run), do: parse_gossip_info(@run)) %>
-          <%= if gossip_info do %>
-            <div class="bg-gray-900 rounded-lg border border-purple-900/50 p-4 mb-6">
-              <h2 class="text-sm font-medium text-purple-400 uppercase tracking-wider mb-3">Knowledge Exchange</h2>
-              <!-- How it works -->
-              <p class="text-sm text-gray-400 mb-4">
-                {topology_description(gossip_info.topology, length(@team_runs))}
-                — {gossip_info.rounds} rounds, {gossip_info.exchange_interval}s apart.
-              </p>
-              <!-- Progress -->
-              <div class="flex items-center gap-4 mb-4">
-                <div class="flex-1">
-                  <%= if @gossip_round do %>
-                    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
-                      <span>Round {@gossip_round.current} of {@gossip_round.total}</span>
-                      <span class={if @gossip_round.current >= @gossip_round.total, do: "text-green-400", else: "text-purple-400"}>
-                        {cond do
-                          @gossip_round.current >= @gossip_round.total -> "Complete"
-                          true -> "Exchanging"
-                        end}
-                      </span>
-                    </div>
-                    <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
-                      <div
-                        class="h-full bg-purple-500 rounded-full transition-all duration-500"
-                        style={"width: #{min(round(@gossip_round.current / max(@gossip_round.total, 1) * 100), 100)}%"}
-                      />
-                    </div>
-                  <% else %>
-                    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
-                      <span>{gossip_info.rounds} rounds configured</span>
-                      <span class={if @run.status == "completed", do: "text-green-400", else: "text-gray-500"}>
-                        {if @run.status == "completed", do: "Complete", else: "Waiting"}
-                      </span>
-                    </div>
-                    <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
-                      <div
-                        class={"h-full bg-#{if @run.status == "completed", do: "green", else: "gray"}-600 rounded-full"}
-                        style={"width: #{if @run.status == "completed", do: "100", else: "0"}%"}
-                      />
-                    </div>
-                  <% end %>
-                </div>
-              </div>
-              <!-- Knowledge Results -->
-              <%= if @gossip_knowledge do %>
-                <div class="border-t border-purple-900/30 pt-4">
-                  <div class="flex items-center gap-3 mb-3">
-                    <h3 class="text-xs font-medium text-purple-400 uppercase tracking-wider">Knowledge Discovered</h3>
-                    <span class="text-xs text-gray-500">{@gossip_knowledge.total_entries} entries across {map_size(@gossip_knowledge.by_topic)} topics</span>
-                  </div>
-                  <!-- Topics -->
-                  <div class="flex flex-wrap gap-2 mb-3">
-                    <span
-                      :for={{topic, count} <- Enum.sort_by(@gossip_knowledge.by_topic, fn {_t, c} -> -c end)}
-                      class="bg-purple-900/30 text-purple-300 text-xs px-2 py-1 rounded"
-                    >
-                      {topic} <span class="text-purple-500">({count})</span>
-                    </span>
-                  </div>
-                  <!-- Top Entries -->
-                  <%= if @gossip_knowledge.top_entries != [] do %>
-                    <div class="space-y-2 max-h-48 overflow-y-auto">
-                      <div
-                        :for={entry <- @gossip_knowledge.top_entries}
-                        class="bg-gray-950 rounded p-2"
-                      >
-                        <div class="flex items-center gap-2 mb-1">
-                          <span class="text-purple-300 text-xs font-medium">{entry.topic}</span>
-                          <span class="text-gray-600 text-xs">from {entry.source}</span>
-                          <span class={["text-xs ml-auto", confidence_label_class(entry.confidence)]}>
-                            {confidence_label(entry.confidence)}
-                          </span>
-                        </div>
-                        <p class="text-gray-400 text-xs">{truncate(entry.content, 150)}</p>
-                      </div>
-                    </div>
-                  <% end %>
-                </div>
-              <% end %>
-            </div>
-          <% end %>
-
-          <!-- Mesh Info (mesh mode only) -->
-          <%= if mesh?(@run) do %>
-            <% mesh_info = parse_mesh_info(@run) %>
-            <%= if mesh_info do %>
-              <div class="bg-gray-900 rounded-lg border border-emerald-900/50 p-4 mb-6">
-                <h2 class="text-sm font-medium text-emerald-400 uppercase tracking-wider mb-3">Mesh Membership</h2>
-                <p class="text-sm text-gray-400 mb-4">
-                  SWIM-inspired failure detection — {length(@team_runs)} autonomous agents with peer-to-peer messaging.
-                </p>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div class="bg-gray-950 rounded p-3">
-                    <span class="text-xs text-gray-500 block">Heartbeat</span>
-                    <span class="text-sm text-white">{mesh_info.heartbeat}s</span>
-                  </div>
-                  <div class="bg-gray-950 rounded p-3">
-                    <span class="text-xs text-gray-500 block">Suspect Timeout</span>
-                    <span class="text-sm text-yellow-300">{mesh_info.suspect_timeout}s</span>
-                  </div>
-                  <div class="bg-gray-950 rounded p-3">
-                    <span class="text-xs text-gray-500 block">Dead Timeout</span>
-                    <span class="text-sm text-red-300">{mesh_info.dead_timeout}s</span>
-                  </div>
-                  <div class="bg-gray-950 rounded p-3">
-                    <span class="text-xs text-gray-500 block">Status</span>
-                    <span class={["text-sm", if(@run.status == "completed", do: "text-green-400", else: if(@run.status == "running", do: "text-blue-400", else: "text-gray-400"))]}>
-                      {cond do
-                        @run.status == "completed" -> "Complete"
-                        @run.status == "running" -> "Active"
-                        @run.status == "failed" -> "Failed"
-                        true -> @run.status
-                      end}
-                    </span>
-                  </div>
-                </div>
-                <%= if mesh_info.cluster_context do %>
-                  <div class="mt-4 border-t border-emerald-900/30 pt-3">
-                    <h3 class="text-xs font-medium text-emerald-400 uppercase tracking-wider mb-2">Cluster Context</h3>
-                    <p class="text-sm text-gray-400">{truncate(mesh_info.cluster_context, 300)}</p>
-                  </div>
-                <% end %>
-              </div>
-            <% end %>
-          <% end %>
-
-          <!-- Node/Agent Cards -->
-          <% visible_runs = Enum.reject(@team_runs, & &1.internal) %>
-          <h2 class="text-lg font-semibold text-white mb-4">{participant_label(@run, :plural)}</h2>
-          <%= if visible_runs == [] do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <p class="text-gray-400">No {participant_label(@run, :lower_plural)} recorded for this run.</p>
-            </div>
-          <% else %>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              <a
-                :for={team <- visible_runs}
-                href={"/runs/#{@run.id}/teams/#{team.team_name}"}
-                class="bg-gray-900 rounded-lg border border-purple-900/30 p-4 hover:border-purple-700/50 transition-colors block"
-              >
-                <div class="flex items-center justify-between mb-2">
-                  <div class="flex items-center gap-2">
-                    <span class={["text-xs", if(team.status == "completed", do: "text-green-400", else: if(team.status == "running", do: "text-blue-400 animate-pulse", else: "text-gray-600"))]}>&bull;</span>
-                    <h3 class="font-medium text-white">{team.team_name}</h3>
-                  </div>
-                  <.status_badge status={display_status(team, @last_seen, @pid_status)} />
-                </div>
-                <p :if={team.role} class="text-sm text-purple-300/70 mb-2">topic: {team.role}</p>
-                <div class="flex items-center gap-4 text-sm">
-                  <.token_display input={total_input(team)} output={team.output_tokens} />
-                  <.duration_display ms={team.duration_ms} />
-                </div>
-                <%= if team.status == "failed" and team.result_summary do %>
-                  <p class="text-xs text-red-400/80 mt-2 truncate" title={team.result_summary}>
-                    {truncate(team.result_summary, 120)}
-                  </p>
-                <% end %>
-              </a>
-            </div>
-          <% end %>
-        <% else %>
-          <!-- DAG Visualization -->
-          <%= if @tiers != [] do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Dependency Graph</h2>
-              <.dag_graph
-                tiers={@tiers}
-                teams={@team_runs}
-                edges={@edges}
-                run_id={@run.id}
-              />
-            </div>
-          <% end %>
-
-          <!-- Team Cards -->
-          <% dag_visible_runs = Enum.reject(@team_runs, & &1.internal) %>
-          <h2 class="text-lg font-semibold text-white mb-4">Teams</h2>
-          <%= if dag_visible_runs == [] do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <p class="text-gray-400">No teams recorded for this run.</p>
-            </div>
-          <% else %>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              <a
-                :for={team <- dag_visible_runs}
-                href={"/runs/#{@run.id}/teams/#{team.team_name}"}
-                class="bg-gray-900 rounded-lg border border-gray-800 p-4 hover:border-gray-600 transition-colors block"
-              >
-                <div class="flex items-center justify-between mb-2">
-                  <h3 class="font-medium text-white">{team.team_name}</h3>
-                  <.status_badge status={display_status(team, @last_seen, @pid_status)} />
-                </div>
-                <p :if={team.role} class="text-sm text-gray-400 mb-2">{team.role}</p>
-                <%= if members = Map.get(@team_members, team.team_name, []) do %>
-                  <div :if={members != []} class="mb-2">
-                    <div class="flex flex-wrap gap-1">
-                      <span
-                        :for={member <- members}
-                        class="inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400"
-                      >
-                        {member}
-                      </span>
-                    </div>
-                  </div>
-                <% end %>
-                <div class="flex items-center gap-4 text-sm">
-                  <span class="text-gray-500">Tier {team.tier || 0}</span>
-                  <.token_display input={total_input(team)} output={team.output_tokens} />
-                  <.duration_display ms={team.duration_ms} />
-                </div>
-              </a>
-            </div>
-          <% end %>
-        <% end %>
-
-        <!-- Activity Feed (all teams, no filter) -->
-        <div class="mt-6">
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-            <div class="flex items-center gap-3 mb-3">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Activity Feed</h2>
-              <span class="text-xs text-gray-600 ml-auto">{length(@activities)} events</span>
-            </div>
-            <%= if @activities == [] do %>
-              <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time.</p>
-            <% else %>
-              <div class="space-y-0.5 max-h-[50vh] overflow-y-auto" id="overview-activity-feed">
-                <%= for {entry, idx} <- Enum.with_index(@activities) do %>
-                  <% expanded = MapSet.member?(@expanded_activities, idx) %>
-                  <div
-                    phx-click="toggle_activity"
-                    phx-value-index={idx}
-                    class={["flex items-start gap-2 text-sm py-1 px-1 rounded cursor-pointer transition-colors", if(expanded, do: "bg-gray-800/40", else: "hover:bg-gray-800/20")]}
-                  >
-                    <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
-                    <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
-                    <span class="text-cortex-400 font-medium shrink-0">{entry.team}:</span>
-                    <%= if expanded do %>
-                      <span class="text-gray-300 break-all min-w-0">{entry.text}</span>
-                    <% else %>
-                      <span class="text-gray-300 truncate min-w-0">{entry.text}</span>
-                    <% end %>
-                  </div>
-                <% end %>
-              </div>
-            <% end %>
-          </div>
-        </div>
+        <.overview_tab
+          run={@run}
+          team_runs={@team_runs}
+          tiers={@tiers}
+          edges={@edges}
+          team_members={@team_members}
+          last_seen={@last_seen}
+          pid_status={@pid_status}
+          coordinator_alive={@coordinator_alive}
+          coordinator_expanded={@coordinator_expanded}
+          coordinator_log={@coordinator_log}
+          coordinator_inbox={@coordinator_inbox}
+          activities={@activities}
+          expanded_activities={@expanded_activities}
+          gossip_round={@gossip_round}
+          gossip_knowledge={@gossip_knowledge}
+        />
       </div>
 
-      <!-- ============ Activity Tab ============ -->
+      <div :if={@current_tab == "graph"}>
+        <.graph_tab run={@run} team_runs={@team_runs} tiers={@tiers} edges={@edges} />
+      </div>
+
+      <div :if={@current_tab == "membership"}>
+        <.membership_tab run={@run} team_runs={@team_runs} last_seen={@last_seen} pid_status={@pid_status} />
+      </div>
+
+      <div :if={@current_tab == "knowledge"}>
+        <.knowledge_tab run={@run} team_runs={@team_runs} gossip_round={@gossip_round} gossip_knowledge={@gossip_knowledge} />
+      </div>
+
       <div :if={@current_tab == "activity"}>
-        <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-          <!-- Team Filter -->
-          <div class="flex items-center gap-3 mb-3">
-            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Activity Feed</h2>
-            <form phx-change="select_activity_team" class="flex-1 max-w-xs">
-              <select
-                name="team"
-                class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
-              >
-                <option value="">All {participant_label(@run, :lower_plural)}</option>
-                <option :for={name <- @team_names} value={name} selected={name == @activity_team}>
-                  {name}
-                </option>
-              </select>
-            </form>
-            <span class="text-xs text-gray-600 ml-auto">{length(filtered_activities(@activities, @activity_team))} events</span>
-          </div>
-          <% visible = filtered_activities(@activities, @activity_team) %>
-          <%= if visible == [] do %>
-            <p class="text-gray-500 text-sm">No activity yet. Events appear here in real-time and clear on page reload.</p>
-          <% else %>
-            <div class="space-y-0.5 min-h-[60vh] max-h-[80vh] overflow-y-auto" id="activity-feed">
-              <%= for {entry, idx} <- Enum.with_index(visible) do %>
-                <% expanded = MapSet.member?(@expanded_activities, idx) %>
-                <div
-                  phx-click="toggle_activity"
-                  phx-value-index={idx}
-                  class={["flex items-start gap-2 text-sm py-1 px-1 rounded cursor-pointer transition-colors", if(expanded, do: "bg-gray-800/40", else: "hover:bg-gray-800/20")]}
-                >
-                  <span class="text-gray-600 text-xs shrink-0 mt-0.5">{entry.at}</span>
-                  <span class={activity_icon_class(entry.kind)}>{activity_icon(entry.kind)}</span>
-                  <span class="text-cortex-400 font-medium shrink-0">{entry.team}:</span>
-                  <%= if expanded do %>
-                    <span class="text-gray-300 break-all min-w-0">{entry.text}</span>
-                  <% else %>
-                    <span class="text-gray-300 truncate min-w-0">{entry.text}</span>
-                  <% end %>
-                </div>
-              <% end %>
-            </div>
-          <% end %>
-        </div>
+        <.activity_tab
+          run={@run}
+          activities={@activities}
+          activity_team={@activity_team}
+          team_names={@team_names}
+          expanded_activities={@expanded_activities}
+        />
       </div>
 
-      <!-- ============ Messages Tab ============ -->
       <div :if={@current_tab == "messages"}>
-        <%= if @run.workspace_path do %>
-          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- Message History (2/3 width) -->
-            <div class="lg:col-span-2 space-y-4">
-              <!-- Team Selector -->
-              <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-                <div class="flex items-center gap-3">
-                  <label class="text-sm text-gray-400 shrink-0">{String.capitalize(participant_label(@run, :singular))}:</label>
-                  <form phx-change="select_messages_team" class="flex-1">
-                    <select
-                      name="team"
-                      class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
-                    >
-                      <option value="">Select {participant_label(@run, :singular)}...</option>
-                      <option value="coordinator" selected={@messages_team == "coordinator"}>[internal] coordinator</option>
-                      <option :for={name <- @team_names} value={name} selected={name == @messages_team}>
-                        {name}
-                      </option>
-                    </select>
-                  </form>
-                  <button
-                    :if={@messages_team}
-                    phx-click="refresh_messages"
-                    class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-                  >
-                    Refresh
-                  </button>
-                </div>
-              </div>
-
-              <!-- Inbox -->
-              <div :if={@messages_team} class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-                  Inbox ({length(@team_inbox)} messages to {@messages_team})
-                </h3>
-                <%= if @team_inbox == [] do %>
-                  <p class="text-gray-500 text-sm">No messages received.</p>
-                <% else %>
-                  <div class="space-y-2 max-h-[40vh] overflow-y-auto">
-                    <div :for={msg <- @team_inbox} class="bg-gray-950 rounded p-3 text-sm">
-                      <div class="flex items-center justify-between mb-1">
-                        <span class="text-cortex-400 font-medium">from: {Map.get(msg, "from", "?")}</span>
-                        <span class="text-gray-500 text-xs">{Map.get(msg, "timestamp", "")}</span>
-                      </div>
-                      <p class="text-gray-300">{Map.get(msg, "content", "")}</p>
-                    </div>
-                  </div>
-                <% end %>
-              </div>
-
-            </div>
-
-            <!-- Send Message (1/3 width) -->
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 h-fit">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Send Message</h2>
-              <form phx-submit="send_message" phx-change="form_update" class="space-y-3">
-                <div>
-                  <label class="text-xs text-gray-500 block mb-1">To</label>
-                  <select
-                    name="to"
-                    class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
-                  >
-                    <option value="">Select recipient...</option>
-                    <option value="coordinator" selected={@msg_to == "coordinator"}>[coordinator]</option>
-                    <option :for={name <- @team_names} value={name} selected={name == @msg_to}>
-                      {name}
-                    </option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-xs text-gray-500 block mb-1">Message</label>
-                  <textarea
-                    name="content"
-                    rows="4"
-                    class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300 resize-y"
-                    placeholder="Type your message..."
-                  ><%= @msg_content %></textarea>
-                </div>
-                <button
-                  type="submit"
-                  class="w-full rounded bg-cortex-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-cortex-500"
-                >
-                  Send
-                </button>
-              </form>
-            </div>
-          </div>
-        <% else %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-            <p class="text-gray-500">No workspace path available. Messages require a workspace with .cortex/ directory.</p>
-          </div>
-        <% end %>
+        <.messages_tab
+          run={@run}
+          team_names={@team_names}
+          messages_team={@messages_team}
+          team_inbox={@team_inbox}
+          msg_to={@msg_to}
+          msg_content={@msg_content}
+        />
       </div>
 
-      <!-- ============ Logs Tab ============ -->
       <div :if={@current_tab == "logs"}>
-        <%= if @run.workspace_path do %>
-          <!-- Team Selector + Refresh -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
-            <div class="flex items-center gap-3">
-              <label class="text-sm text-gray-400 shrink-0">{String.capitalize(participant_label(@run, :singular))}:</label>
-              <form phx-change="select_log_team" class="flex-1">
-                <select
-                  name="team"
-                  class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
-                >
-                  <option value="">Select {participant_label(@run, :singular)}...</option>
-                  <option value="__all__" selected={@selected_log_team == "__all__"}>All {participant_label(@run, :lower_plural)}</option>
-                  <option value="coordinator" selected={@selected_log_team == "coordinator"}>[internal] coordinator</option>
-                  <option value="summary-agent" selected={@selected_log_team == "summary-agent"}>[internal] summary-agent</option>
-                  <option :for={name <- @team_names} value={name} selected={name == @selected_log_team}>
-                    {name}
-                  </option>
-                </select>
-              </form>
-              <button
-                :if={@selected_log_team}
-                phx-click="toggle_log_sort"
-                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-              >
-                {if @log_sort == :desc, do: "Newest first ↓", else: "Oldest first ↑"}
-              </button>
-              <button
-                :if={@selected_log_team}
-                phx-click="refresh_logs"
-                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-
-          <!-- Log Content -->
-          <%= if @selected_log_team do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <div class="flex items-center justify-between mb-3">
-                <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
-                  {if @selected_log_team == "__all__", do: "All #{participant_label(@run, :lower_plural)}", else: "#{@selected_log_team}.log"}
-                </h2>
-                <span :if={@log_lines} class="text-xs text-gray-600">
-                  {length(@log_lines)} lines (last 500)
-                </span>
-              </div>
-              <%= if @log_lines do %>
-                <div class="max-h-[75vh] overflow-y-auto rounded bg-gray-950 divide-y divide-gray-800/50">
-                  <%= for line <- @log_lines do %>
-                    <% expanded = MapSet.member?(@expanded_logs, line.num) %>
-                    <div
-                      phx-click="toggle_log_line"
-                      phx-value-line={line.num}
-                      class={["px-3 py-2 cursor-pointer transition-colors",
-                        if(expanded, do: "bg-gray-800/40", else:
-                          if(rem(line.num, 2) == 0, do: "bg-gray-950 hover:bg-gray-900/50", else: "bg-gray-900/30 hover:bg-gray-900/60")
-                        )
-                      ]}
-                    >
-                      <!-- Collapsed: single line -->
-                      <div class="flex items-start gap-3">
-                        <span class="text-gray-600 font-mono text-xs select-none shrink-0 w-8 text-right pt-0.5">
-                          {line.num}
-                        </span>
-                        <span class={["shrink-0 pt-0.5", if(expanded, do: "text-cortex-400", else: "text-gray-600")]}>
-                          {if expanded, do: "v", else: ">"}
-                        </span>
-                        <span
-                          :if={line[:team]}
-                          class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium bg-cortex-900/40 text-cortex-300"
-                        >
-                          {line.team}
-                        </span>
-                        <span
-                          :if={line.type}
-                          class={["shrink-0 rounded px-1.5 py-0.5 text-xs font-medium", log_type_class(line.type)]}
-                        >
-                          {line.type}
-                        </span>
-                        <%= if expanded do %>
-                          <code class="text-gray-400 text-xs font-mono flex-1 pt-0.5 truncate">
-                            {line.raw}
-                          </code>
-                        <% else %>
-                          <code class="text-gray-400 text-xs font-mono overflow-x-auto whitespace-nowrap block flex-1 pt-0.5">
-                            {line.raw}
-                          </code>
-                        <% end %>
-                      </div>
-                      <!-- Expanded: parsed JSON fields -->
-                      <div :if={expanded && line.parsed} class="mt-2 ml-14 space-y-1 border-l-2 border-gray-700 pl-3">
-                        <div :for={{key, val} <- line.parsed} class="flex items-start gap-2 text-xs font-mono">
-                          <span class="text-cortex-400 shrink-0">{key}:</span>
-                          <span class="text-gray-300 whitespace-pre-wrap break-all">{format_json_value(val)}</span>
-                        </div>
-                      </div>
-                      <div :if={expanded && !line.parsed} class="mt-2 ml-14 border-l-2 border-gray-700 pl-3">
-                        <pre class="text-gray-400 text-xs font-mono whitespace-pre-wrap break-all">{line.raw}</pre>
-                      </div>
-                    </div>
-                  <% end %>
-                </div>
-              <% else %>
-                <p class="text-gray-500 text-sm">No log file found for this team.</p>
-              <% end %>
-            </div>
-          <% else %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <p class="text-gray-500 text-sm">Select a {participant_label(@run, :singular)} to view its log.</p>
-            </div>
-          <% end %>
-        <% else %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-            <p class="text-gray-500">No workspace path available. Logs require a workspace with .cortex/logs/ directory.</p>
-          </div>
-        <% end %>
+        <.logs_tab
+          run={@run}
+          team_names={@team_names}
+          selected_log_team={@selected_log_team}
+          log_lines={@log_lines}
+          log_sort={@log_sort}
+          expanded_logs={@expanded_logs}
+        />
       </div>
 
-      <!-- ============ Summaries Tab ============ -->
-      <div :if={@current_tab == "summaries"}>
-        <div class="space-y-6">
-          <!-- Generate buttons -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-            <div class="flex items-center gap-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Generate</h2>
-              <% loading = has_running_summary_job?(@summary_jobs) %>
-              <button
-                :if={@run && @run.workspace_path}
-                phx-click="request_ai_summary"
-                disabled={loading}
-                class={[
-                  "rounded px-4 py-2 text-sm font-medium transition-colors",
-                  if(loading,
-                    do: "bg-gray-700 text-gray-400 cursor-wait",
-                    else: "bg-cortex-600 text-white hover:bg-cortex-500"
-                  )
-                ]}
-              >
-                {if loading, do: "Generating Agent Summary...", else: "Generate Agent Summary"}
-              </button>
-              <button
-                phx-click="generate_summary"
-                class="rounded px-4 py-2 text-sm font-medium bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
-              >
-                Generate DB Summary
-              </button>
-              <button
-                phx-click="refresh_summaries"
-                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500 ml-auto"
-              >
-                Reload from disk
-              </button>
-            </div>
-            <p class="text-xs text-gray-500 mt-2">
-              Agent Summary spawns a haiku agent to analyze workspace files (state, logs, registry). DB Summary builds from Ecto state.
-            </p>
-          </div>
-
-          <!-- Summary Jobs -->
-          <%= if @summary_jobs != [] do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Summary Jobs</h2>
-              <div class="space-y-2">
-                <%= for job <- @summary_jobs do %>
-                  <div class={["flex items-center justify-between rounded p-3 text-sm", job_row_class(job.status)]}>
-                    <div class="flex items-center gap-3">
-                      <span class={["text-xs font-medium px-2 py-0.5 rounded", job_badge_class(job.status)]}>
-                        {job_label(job.status)}
-                      </span>
-                      <span class="text-gray-400">Agent Summary</span>
-                      <span :if={job.status == :running} class="text-gray-500 text-xs">{elapsed_since(job.started_at)}</span>
-                    </div>
-                    <div class="flex items-center gap-3 text-xs">
-                      <span :if={job.input_tokens} class="text-cortex-400">
-                        <.token_display input={job.input_tokens} output={job.output_tokens} />
-                      </span>
-                      <span class="text-gray-600">{Calendar.strftime(job.started_at, "%H:%M:%S")}</span>
-                      <button
-                        :if={job.status != :running}
-                        phx-click="dismiss_summary_job"
-                        phx-value-id={job.id}
-                        class="text-gray-600 hover:text-gray-400"
-                      >
-                        &times;
-                      </button>
-                    </div>
-                  </div>
-                <% end %>
-              </div>
-            </div>
-          <% end %>
-
-          <!-- Agent Summaries from .cortex/summaries/ -->
-          <%= if @coordinator_summaries != [] do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <button phx-click="toggle_summaries" class="flex items-center justify-between w-full group">
-                <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">
-                  Agent Summaries
-                  <span class="text-xs text-gray-600 normal-case ml-2">({length(@coordinator_summaries)})</span>
-                </h2>
-                <svg class={["w-4 h-4 text-gray-500 transition-transform", if(@summaries_expanded, do: "rotate-180", else: "")]} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              <div :if={@summaries_expanded} class="mt-3">
-                <div class="flex flex-wrap gap-2 mb-3">
-                  <button
-                    :for={file <- @coordinator_summaries}
-                    phx-click="select_summary"
-                    phx-value-file={file}
-                    class={[
-                      "text-xs px-3 py-1.5 rounded border transition-colors",
-                      if(@selected_summary && @selected_summary.name == file,
-                        do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
-                        else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
-                      )
-                    ]}
-                  >
-                    {pretty_filename(file)}
-                  </button>
-                </div>
-                <div :if={@selected_summary} class="bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">
-                  <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_summary.content}</pre>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
-          <!-- DB Summary -->
-          <%= if @run_summary do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">DB Summary</h2>
-              <pre class="text-gray-300 text-sm font-mono whitespace-pre overflow-x-auto bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">{@run_summary}</pre>
-            </div>
-          <% end %>
-
-          <%= if @coordinator_summaries == [] and !@run_summary and @summary_jobs == [] do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
-              <p class="text-gray-400 mb-3">No summaries yet.</p>
-              <p class="text-gray-500 text-sm">Click "Generate Agent Summary" to spawn a haiku agent that analyzes your workspace files, or "Generate DB Summary" for a quick snapshot from database state.</p>
-            </div>
-          <% end %>
-        </div>
-      </div>
-
-      <!-- ============ Diagnostics Tab ============ -->
       <div :if={@current_tab == "diagnostics"}>
-        <%= if @run.workspace_path do %>
-          <!-- Team Selector + Refresh -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
-            <div class="flex items-center gap-3">
-              <label class="text-sm text-gray-400 shrink-0">{String.capitalize(participant_label(@run, :singular))}:</label>
-              <form phx-change="select_diag_team" class="flex-1">
-                <select
-                  name="team"
-                  class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-300"
-                >
-                  <option value="">Select {participant_label(@run, :singular)}...</option>
-                  <option :for={name <- @team_names} value={name} selected={name == @diagnostics_team}>
-                    {name}
-                  </option>
-                </select>
-              </form>
-              <button
-                :if={@diagnostics_team}
-                phx-click="refresh_diagnostics"
-                class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-
-          <%= if @diagnostics_team && @diagnostics_report do %>
-            <% report = @diagnostics_report %>
-            <!-- Diagnosis Banner -->
-            <div class={[
-              "rounded-lg border p-4 mb-4",
-              diag_banner_class(report.diagnosis)
-            ]}>
-              <div class="flex items-center gap-3">
-                <span class="text-lg">{diag_icon(report.diagnosis)}</span>
-                <div>
-                  <p class="font-medium">{diag_title(report.diagnosis)}</p>
-                  <p class="text-sm opacity-80">{report.diagnosis_detail}</p>
-                </div>
-              </div>
-              <div class="flex items-center gap-4 mt-3 text-sm opacity-70 flex-wrap">
-                <span :if={report.session_id}>Session: <code class="font-mono">{report.session_id}</code></span>
-                <span :if={report.model}>Model: {report.model}</span>
-                <span :if={report.total_input_tokens > 0 or report.total_output_tokens > 0}>
-                  Tokens: {format_token_count(report.total_input_tokens)} in / {format_token_count(report.total_output_tokens)} out
-                </span>
-                <span>{report.line_count} log lines</span>
-              </div>
-            </div>
-
-            <!-- AI Diagnostic Report -->
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
-              <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">AI Diagnostic Report</h3>
-                <button
-                  :if={@run && @run.workspace_path}
-                  phx-click="request_debug_report"
-                  disabled={@debug_loading}
-                  class={[
-                    "rounded px-4 py-2 text-sm font-medium transition-colors",
-                    if(@debug_loading,
-                      do: "bg-gray-700 text-gray-400 cursor-wait",
-                      else: "bg-cortex-600 text-white hover:bg-cortex-500"
-                    )
-                  ]}
-                >
-                  {if @debug_loading, do: "Analyzing...", else: "Generate Diagnostic Report"}
-                </button>
-              </div>
-              <%= if @debug_report do %>
-                <div class="bg-gray-950 rounded p-4 max-h-[50vh] overflow-y-auto">
-                  <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@debug_report.content}</pre>
-                </div>
-              <% else %>
-                <p class="text-gray-500 text-sm">Spawns a haiku agent to analyze this {participant_label(@run, :singular)}'s log and produce a diagnostic report.</p>
-              <% end %>
-            </div>
-
-            <!-- Resume / Restart buttons for this specific team (hide when team is actively running) -->
-            <% diag_team_run = Enum.find(@team_runs, &(&1.team_name == @diagnostics_team)) %>
-            <% diag_team_status = if(diag_team_run, do: diag_team_run.status || "pending", else: "pending") %>
-            <div
-              :if={report.session_id && report.diagnosis not in [:completed] && diag_team_status != "running"}
-              class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4"
-            >
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-sm text-gray-300">
-                    Session <code class="font-mono text-cortex-400">{report.session_id}</code>
-                  </p>
-                </div>
-                <div class="flex items-center gap-2">
-                  <button
-                    :if={not report.has_result}
-                    phx-click="resume_single_team"
-                    phx-value-team={@diagnostics_team}
-                    class="rounded bg-cortex-600 px-4 py-2 text-sm font-medium text-white hover:bg-cortex-500 shrink-0"
-                  >
-                    Resume
-                  </button>
-                  <button
-                    phx-click="restart_team"
-                    phx-value-team={@diagnostics_team}
-                    class="rounded bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-500 shrink-0"
-                    title="Start fresh session with context from previous run"
-                  >
-                    Restart
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Result Summary (if exists) -->
-            <div :if={report.result_text} class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-4">
-              <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Result</h3>
-              <pre class="text-gray-300 text-sm whitespace-pre-wrap">{report.result_text}</pre>
-            </div>
-
-            <!-- Timeline -->
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Event Timeline</h3>
-                <span class="text-xs text-gray-600">{length(report.entries)} events</span>
-              </div>
-              <%= if report.entries == [] do %>
-                <p class="text-gray-500 text-sm">No events found in log.</p>
-              <% else %>
-                <div class="space-y-0.5 max-h-[70vh] overflow-y-auto">
-                  <div
-                    :for={entry <- report.entries}
-                    class="flex items-start gap-2 text-sm py-1.5 px-2 rounded hover:bg-gray-800/50"
-                  >
-                    <span class={[
-                      "shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center",
-                      diag_entry_class(entry.type)
-                    ]}>
-                      {diag_entry_label(entry.type)}
-                    </span>
-                    <span :if={entry.tools != []} class="text-cortex-400 font-medium shrink-0">
-                      {Enum.join(entry.tools, ", ")}
-                    </span>
-                    <span class="text-gray-300 break-all">{entry.detail}</span>
-                    <span :if={entry.timestamp} class="text-gray-500 text-xs shrink-0 ml-auto">
-                      {format_iso_time(entry.timestamp)}
-                    </span>
-                  </div>
-
-                  <!-- End-of-log marker for incomplete sessions -->
-                  <%= if not report.has_result do %>
-                    <%= if report.diagnosis == :in_progress do %>
-                      <div class="flex items-start gap-2 text-sm py-2 px-2 mt-2 rounded bg-blue-950/30 border border-blue-900/50">
-                        <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center bg-blue-900/60 text-blue-300">
-                          LIVE
-                        </span>
-                        <span class="text-blue-300">
-                          Process is still running — log continues to grow.
-                        </span>
-                      </div>
-                    <% else %>
-                      <div class="flex items-start gap-2 text-sm py-2 px-2 mt-2 rounded bg-red-950/30 border border-red-900/50">
-                        <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium w-20 text-center bg-red-900/60 text-red-300">
-                          END
-                        </span>
-                        <span class="text-red-300">
-                          Log ends here — no result line received. Process died or was killed.
-                        </span>
-                      </div>
-                    <% end %>
-                  <% end %>
-                </div>
-              <% end %>
-            </div>
-          <% else %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <p class="text-gray-500 text-sm">Select a {participant_label(@run, :singular)} to view diagnostics.</p>
-            </div>
-          <% end %>
-
-          <!-- Previous Diagnostic Reports -->
-          <%= if @debug_reports != [] do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mt-4">
-              <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-                Previous Diagnostic Reports
-                <span class="text-xs text-gray-600 normal-case ml-2">({length(@debug_reports)})</span>
-              </h3>
-              <div class="flex flex-wrap gap-2 mb-3">
-                <button
-                  :for={file <- @debug_reports}
-                  phx-click="select_debug_report"
-                  phx-value-file={file}
-                  class={[
-                    "text-xs px-3 py-1.5 rounded border transition-colors",
-                    if(@selected_debug_report && @selected_debug_report.name == file,
-                      do: "border-cortex-500 text-cortex-300 bg-cortex-900/30",
-                      else: "border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-500"
-                    )
-                  ]}
-                >
-                  {pretty_filename(file)}
-                </button>
-              </div>
-              <div :if={@selected_debug_report} class="bg-gray-950 rounded p-4 max-h-[60vh] overflow-y-auto">
-                <pre class="text-gray-300 text-sm font-mono whitespace-pre-wrap overflow-x-auto">{@selected_debug_report.content}</pre>
-              </div>
-            </div>
-          <% end %>
-        <% else %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
-            <p class="text-gray-500">No workspace path available. Diagnostics require a workspace with .cortex/logs/ directory.</p>
-          </div>
-        <% end %>
+        <.diagnostics_tab
+          run={@run}
+          team_runs={@team_runs}
+          team_names={@team_names}
+          diagnostics_team={@diagnostics_team}
+          diagnostics_report={@diagnostics_report}
+          debug_report={@debug_report}
+          debug_loading={@debug_loading}
+          debug_reports={@debug_reports}
+          selected_debug_report={@selected_debug_report}
+        />
       </div>
 
-      <!-- ============ Jobs Tab ============ -->
+      <div :if={@current_tab == "summaries"}>
+        <.summaries_tab
+          run={@run}
+          summary_jobs={@summary_jobs}
+          coordinator_summaries={@coordinator_summaries}
+          summaries_expanded={@summaries_expanded}
+          selected_summary={@selected_summary}
+          run_summary={@run_summary}
+        />
+      </div>
+
       <div :if={@current_tab == "jobs"}>
-        <%= if @run_jobs == [] do %>
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 text-center">
-            <p class="text-gray-400">No internal jobs for this run.</p>
-            <p class="text-gray-500 text-sm mt-2">
-              Jobs appear here when you generate summaries, debug reports, or start coordinators.
-            </p>
-          </div>
-        <% else %>
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            <div
-              :for={job <- @run_jobs}
-              phx-click="select_run_job"
-              phx-value-id={job.id}
-              class={[
-                "bg-gray-900 rounded-lg border p-4 cursor-pointer transition-colors",
-                if(@selected_run_job && @selected_run_job.id == job.id,
-                  do: "border-cortex-500 ring-1 ring-cortex-500/30",
-                  else: "border-gray-800 hover:border-gray-600"
-                )
-              ]}
-            >
-              <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-                <dt class="text-gray-500">Tool</dt>
-                <dd class="text-white font-medium">{job_type_label_for(job.team_name)}</dd>
-                <dt class="text-gray-500">Requester</dt>
-                <dd class="text-gray-300">{job_target_from_role(job.role) || "system"}</dd>
-                <dt class="text-gray-500">Status</dt>
-                <dd class={job_status_class(job.status)}>{job.status}</dd>
-                <dt class="text-gray-500">Started</dt>
-                <dd class="text-gray-400">{format_job_datetime(job.started_at)}</dd>
-                <dt :if={job.completed_at} class="text-gray-500">Completed</dt>
-                <dd :if={job.completed_at} class="text-gray-400">
-                  {format_job_datetime(job.completed_at)}
-                  <span :if={job.duration_ms} class="text-gray-600 ml-1">({format_job_duration(job.duration_ms)})</span>
-                </dd>
-                <dt :if={job.input_tokens || job.output_tokens} class="text-gray-500">Tokens</dt>
-                <dd :if={job.input_tokens || job.output_tokens} class="text-gray-400">
-                  {job.input_tokens || 0} in / {job.output_tokens || 0} out
-                </dd>
-              </dl>
-            </div>
-          </div>
-
-          <!-- Selected job detail -->
-          <%= if @selected_run_job do %>
-            <div class="mt-4 bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <div class="flex items-center justify-between mb-4">
-                <h3 class="text-sm font-medium text-white">
-                  {job_type_label_for(@selected_run_job.team_name)}
-                  <span :if={job_target_from_role(@selected_run_job.role)} class="text-gray-400 font-normal">
-                    — {job_target_from_role(@selected_run_job.role)}
-                  </span>
-                </h3>
-                <div class="flex items-center gap-2">
-                  <button
-                    phx-click="refresh_run_job_log"
-                    class="text-xs text-gray-500 hover:text-gray-300 px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    phx-click="close_run_job"
-                    class="text-gray-500 hover:text-gray-300"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-
-              <!-- Detail fields -->
-              <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-sm mb-4">
-                <div>
-                  <dt class="text-gray-500 text-xs">Status</dt>
-                  <dd class={job_status_class(@selected_run_job.status)}>{@selected_run_job.status}</dd>
-                </div>
-                <div :if={@selected_run_job.input_tokens || @selected_run_job.output_tokens}>
-                  <dt class="text-gray-500 text-xs">Tokens</dt>
-                  <dd class="text-gray-300">{@selected_run_job.input_tokens || 0} in / {@selected_run_job.output_tokens || 0} out</dd>
-                </div>
-                <div :if={@selected_run_job.session_id}>
-                  <dt class="text-gray-500 text-xs">Session</dt>
-                  <dd class="text-gray-400 font-mono text-xs truncate" title={@selected_run_job.session_id}>
-                    {String.slice(@selected_run_job.session_id, 0, 16)}...
-                  </dd>
-                </div>
-                <div :if={@selected_run_job.result_summary}>
-                  <dt class="text-gray-500 text-xs">Result</dt>
-                  <dd class="text-gray-300 text-xs truncate" title={@selected_run_job.result_summary}>
-                    {truncate(@selected_run_job.result_summary, 80)}
-                  </dd>
-                </div>
-              </dl>
-
-              <!-- Log viewer -->
-              <div class="border-t border-gray-800 pt-4">
-                <h3 class="text-xs font-medium text-gray-500 uppercase mb-2">
-                  Log
-                  <span :if={@run_job_log} class="text-gray-600 normal-case ml-1">({length(@run_job_log)} lines)</span>
-                </h3>
-                <%= if @run_job_log && @run_job_log != [] do %>
-                  <div class="max-h-[50vh] overflow-y-auto rounded bg-gray-950 p-3 space-y-0.5">
-                    <div :for={line <- @run_job_log} class="text-xs font-mono text-gray-400">
-                      <span :if={line.type} class={["rounded px-1 py-0.5 mr-1 text-xs", run_job_log_class(line.type)]}>
-                        {line.type}
-                      </span>
-                      <span class="break-all">{truncate(line.text, 200)}</span>
-                    </div>
-                  </div>
-                  <p class="text-xs text-gray-600 mt-2">
-                    Showing last 200 lines. For full logs, use the
-                    <button phx-click="switch_tab" phx-value-tab="logs" class="text-cortex-400 hover:text-cortex-300 underline">Logs tab</button>.
-                  </p>
-                <% else %>
-                  <p class="text-gray-500 text-sm">
-                    {if @selected_run_job.log_path, do: "No log content yet.", else: "No log path recorded."}
-                  </p>
-                <% end %>
-              </div>
-            </div>
-          <% end %>
-        <% end %>
+        <.jobs_tab
+          run={@run}
+          run_jobs={@run_jobs}
+          selected_run_job={@selected_run_job}
+          run_job_log={@run_job_log}
+        />
       </div>
 
-      <!-- ============ Settings Tab ============ -->
       <div :if={@current_tab == "settings"}>
-        <% config = parse_run_config(@run) %>
-        <div class="space-y-4">
-          <!-- Run Identity -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Run</h2>
-            <dl class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
-              <div>
-                <dt class="text-xs text-gray-500">Name</dt>
-                <dd class="text-sm text-gray-200 font-mono">{@run.name || "Untitled"}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">ID</dt>
-                <dd class="text-sm text-gray-400 font-mono text-xs">{@run.id}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Status</dt>
-                <dd><.status_badge status={@run.status} /></dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Mode</dt>
-                <dd class="text-sm text-gray-200">{@run.mode || "workflow"}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Workspace Path</dt>
-                <dd class="text-sm text-gray-200 font-mono">{@run.workspace_path || "--"}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Created</dt>
-                <dd class="text-sm text-gray-200">{format_datetime(@run.inserted_at)}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Started</dt>
-                <dd class="text-sm text-gray-200">{format_datetime(@run.started_at)}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Completed</dt>
-                <dd class="text-sm text-gray-200">{format_datetime(@run.completed_at)}</dd>
-              </div>
-            </dl>
-          </div>
-
-          <!-- Execution -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-            <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Execution</h2>
-            <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
-              <div>
-                <dt class="text-xs text-gray-500">{participant_label(@run, :plural)}</dt>
-                <dd class="text-sm text-gray-200">{Enum.count(@team_runs, &(not &1.internal))}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">{cond do
-                  gossip?(@run) -> "Rounds"
-                  mesh?(@run) -> "Mode"
-                  true -> "Tiers"
-                end}</dt>
-                <dd class="text-sm text-gray-200">{cond do
-                  gossip?(@run) -> (parse_gossip_info(@run) || %{rounds: 0}).rounds
-                  mesh?(@run) -> "autonomous"
-                  true -> length(@tiers)
-                end}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Tokens</dt>
-                <dd class="text-sm text-gray-200"><.token_display input={sum_team_field(@team_runs, :input_tokens)} output={sum_team_field(@team_runs, :output_tokens)} /></dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500">Duration</dt>
-                <dd class="text-sm text-gray-200"><.duration_display ms={@run.total_duration_ms} /></dd>
-              </div>
-            </dl>
-          </div>
-
-          <!-- Config Defaults (parsed from YAML) -->
-          <%= if config do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Defaults</h2>
-              <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
-                <div>
-                  <dt class="text-xs text-gray-500">Model</dt>
-                  <dd class="text-sm text-gray-200">{config.defaults.model}</dd>
-                </div>
-                <div>
-                  <dt class="text-xs text-gray-500">Max Turns</dt>
-                  <dd class="text-sm text-gray-200">{config.defaults.max_turns}</dd>
-                </div>
-                <div>
-                  <dt class="text-xs text-gray-500">Permission Mode</dt>
-                  <dd class="text-sm text-gray-200">{config.defaults.permission_mode}</dd>
-                </div>
-                <div>
-                  <dt class="text-xs text-gray-500">Timeout</dt>
-                  <dd class="text-sm text-gray-200">{config.defaults.timeout_minutes}m</dd>
-                </div>
-              </dl>
-            </div>
-
-            <!-- Team Summary Table -->
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">{participant_label(@run, :plural)}</h2>
-              <div class="overflow-x-auto">
-                <table class="w-full">
-                  <thead>
-                    <tr class="border-b border-gray-800">
-                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Name</th>
-                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Lead</th>
-                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Model</th>
-                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Members</th>
-                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Tasks</th>
-                      <th class="text-left text-xs font-medium text-gray-500 uppercase px-3 py-2">Depends On</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr :for={team <- config.teams} class="border-b border-gray-800/50">
-                      <td class="px-3 py-2 text-sm text-cortex-400 font-medium">{team.name}</td>
-                      <td class="px-3 py-2 text-sm text-gray-300">{team.lead.role}</td>
-                      <td class="px-3 py-2 text-sm text-gray-400">{team.lead.model || config.defaults.model}</td>
-                      <td class="px-3 py-2 text-sm text-gray-400">{length(team.members)}</td>
-                      <td class="px-3 py-2 text-sm text-gray-400">{length(team.tasks)}</td>
-                      <td class="px-3 py-2 text-sm text-gray-400 font-mono">
-                        {if team.depends_on == [], do: "--", else: Enum.join(team.depends_on, ", ")}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          <% end %>
-
-          <!-- Raw YAML -->
-          <%= if @run.config_yaml do %>
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">orchestra.yaml</h2>
-              <pre class="bg-gray-950 rounded p-4 text-xs text-gray-300 font-mono overflow-auto max-h-[60vh] whitespace-pre-wrap">{@run.config_yaml}</pre>
-            </div>
-          <% end %>
-        </div>
+        <.settings_tab run={@run} team_runs={@team_runs} tiers={@tiers} />
       </div>
+
+      <%!-- Team Slide-Over Panel --%>
+      <.team_slide_over
+        show={@team_panel_open}
+        team_run={@panel_team_run}
+        panel_log={@panel_log}
+        panel_diagnostics={@panel_diagnostics}
+        run={@run}
+      />
     <% end %>
     """
   end
@@ -3406,6 +2339,18 @@ defmodule CortexWeb.RunDetailLive do
 
   # -- Tab helpers --
 
+  defp visible_tabs(run) do
+    mode_tab =
+      cond do
+        gossip?(run) -> ["knowledge"]
+        mesh?(run) -> ["membership"]
+        true -> ["graph"]
+      end
+
+    ["overview"] ++
+      mode_tab ++ ["activity", "messages", "logs", "summaries", "diagnostics", "jobs", "settings"]
+  end
+
   defp tab_label("overview", _assigns), do: "Overview"
 
   defp tab_label("activity", assigns) do
@@ -3422,13 +2367,6 @@ defmodule CortexWeb.RunDetailLive do
   defp tab_label(tab, _assigns), do: String.capitalize(tab)
 
   # -- Stalled detection (Priority 3) --
-
-  defp has_stalled_teams?(team_runs, run_status, last_seen, pid_status) do
-    run_status in ["running", "failed"] and
-      team_runs
-      |> Enum.reject(& &1.internal)
-      |> Enum.any?(fn tr -> team_stalled?(tr, last_seen, pid_status) end)
-  end
 
   defp team_stalled?(team_run, last_seen, pid_status) do
     (team_run.status || "pending") == "running" and
@@ -3459,27 +2397,6 @@ defmodule CortexWeb.RunDetailLive do
     else
       raw
     end
-  end
-
-  defp count_stalled(team_runs, last_seen, pid_status) do
-    team_runs
-    |> Enum.reject(& &1.internal)
-    |> Enum.count(fn tr -> team_stalled?(tr, last_seen, pid_status) end)
-  end
-
-  defp count_active_running(team_runs, last_seen, pid_status) do
-    team_runs
-    |> Enum.reject(& &1.internal)
-    |> Enum.count(fn tr ->
-      (tr.status || "pending") == "running" and not team_stalled?(tr, last_seen, pid_status)
-    end)
-  end
-
-  defp stalled_team_names(team_runs, last_seen, pid_status) do
-    team_runs
-    |> Enum.filter(fn tr -> team_stalled?(tr, last_seen, pid_status) end)
-    |> Enum.map(& &1.team_name)
-    |> Enum.sort()
   end
 
   # -- Pending/continue detection --
@@ -3563,21 +2480,6 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  defp job_row_class(:running), do: "bg-blue-900/20 border border-blue-800/50"
-  defp job_row_class(:completed), do: "bg-green-900/20 border border-green-800/50"
-  defp job_row_class(:failed), do: "bg-red-900/20 border border-red-800/50"
-  defp job_row_class(_), do: "bg-gray-900/20 border border-gray-800/50"
-
-  defp job_badge_class(:running), do: "bg-blue-900/40 text-blue-300"
-  defp job_badge_class(:completed), do: "bg-green-900/40 text-green-300"
-  defp job_badge_class(:failed), do: "bg-red-900/40 text-red-300"
-  defp job_badge_class(_), do: "bg-gray-900/40 text-gray-300"
-
-  defp job_label(:running), do: "Running"
-  defp job_label(:completed), do: "Done"
-  defp job_label(:failed), do: "Failed"
-  defp job_label(_), do: "Unknown"
-
   defp get_run_jobs(run) do
     if run do
       run.id
@@ -3589,42 +2491,6 @@ defmodule CortexWeb.RunDetailLive do
     end
   rescue
     _ -> []
-  end
-
-  defp job_type_label_for("coordinator"), do: "Coordinator"
-  defp job_type_label_for("summary-agent"), do: "Summary"
-  defp job_type_label_for("debug-agent"), do: "Debug Report"
-  defp job_type_label_for(name), do: name
-
-  defp job_target_from_role(nil), do: nil
-
-  defp job_target_from_role(role) do
-    case String.split(role, " — ", parts: 2) do
-      [_, target] -> target
-      _ -> nil
-    end
-  end
-
-  defp job_status_class("completed"), do: "text-green-300"
-  defp job_status_class("running"), do: "text-blue-300"
-  defp job_status_class("failed"), do: "text-red-300"
-  defp job_status_class(_), do: "text-gray-400"
-
-  defp format_job_datetime(nil), do: "—"
-  defp format_job_datetime(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
-
-  defp format_job_datetime(%NaiveDateTime{} = ndt),
-    do: Calendar.strftime(ndt, "%Y-%m-%d %H:%M:%S")
-
-  defp format_job_datetime(_), do: "—"
-
-  defp format_job_duration(nil), do: nil
-  defp format_job_duration(ms) when ms < 60_000, do: "#{div(ms, 1000)}s"
-
-  defp format_job_duration(ms) do
-    mins = div(ms, 60_000)
-    secs = div(rem(ms, 60_000), 1000)
-    "#{mins}m #{String.pad_leading(to_string(secs), 2, "0")}s"
   end
 
   @max_job_log_lines 200
@@ -3649,14 +2515,6 @@ defmodule CortexWeb.RunDetailLive do
       _ -> %{type: nil, text: line}
     end
   end
-
-  defp run_job_log_class("assistant"), do: "bg-blue-900/50 text-blue-300"
-  defp run_job_log_class("system"), do: "bg-purple-900/50 text-purple-300"
-  defp run_job_log_class("result"), do: "bg-cyan-900/50 text-cyan-300"
-  defp run_job_log_class("error"), do: "bg-red-900/50 text-red-300"
-  defp run_job_log_class("tool_use"), do: "bg-green-900/50 text-green-300"
-  defp run_job_log_class("tool_result"), do: "bg-emerald-900/50 text-emerald-300"
-  defp run_job_log_class(_), do: "bg-gray-800/50 text-gray-400"
 
   defp lookup_internal_tokens(run, team_name) do
     if run do
@@ -3752,41 +2610,6 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  defp pretty_filename(filename) do
-    # Parse: 20260317T051112_debug_agent-a.md or 20260317T051112_ai_summary.md
-    case Regex.run(~r/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})_(.+)\.md$/, filename) do
-      [_, _y, month, day, hour, min, _sec, label] ->
-        month_name = month_abbrev(month)
-        pretty_label = label |> String.replace("_", " ") |> String.replace("-", " ")
-
-        pretty_label =
-          pretty_label
-          |> String.replace("ai summary", "AI Summary")
-          |> String.replace(~r/^debug /, "Debug: ")
-          |> String.replace(~r/^mesh complete$/, "Mesh Complete")
-          |> String.replace(~r/^dag complete$/, "DAG Complete")
-
-        "#{pretty_label} — #{month_name} #{day}, #{hour}:#{min}"
-
-      _ ->
-        filename
-    end
-  end
-
-  defp month_abbrev("01"), do: "Jan"
-  defp month_abbrev("02"), do: "Feb"
-  defp month_abbrev("03"), do: "Mar"
-  defp month_abbrev("04"), do: "Apr"
-  defp month_abbrev("05"), do: "May"
-  defp month_abbrev("06"), do: "Jun"
-  defp month_abbrev("07"), do: "Jul"
-  defp month_abbrev("08"), do: "Aug"
-  defp month_abbrev("09"), do: "Sep"
-  defp month_abbrev("10"), do: "Oct"
-  defp month_abbrev("11"), do: "Nov"
-  defp month_abbrev("12"), do: "Dec"
-  defp month_abbrev(_), do: "?"
-
   defp parse_log_file(log_path) do
     case File.read(log_path) do
       {:ok, content} ->
@@ -3837,32 +2660,10 @@ defmodule CortexWeb.RunDetailLive do
     end
   end
 
-  defp format_json_value(val) when is_binary(val) do
-    if String.length(val) > 500 do
-      String.slice(val, 0, 500) <> "..."
-    else
-      val
-    end
-  end
-
-  defp format_json_value(val) when is_map(val) or is_list(val) do
-    Jason.encode!(val, pretty: true)
-  end
-
-  defp format_json_value(val), do: inspect(val)
-
   defp sort_log_lines(nil, _sort), do: nil
 
   defp sort_log_lines(lines, :desc), do: Enum.sort_by(lines, & &1.num, :desc)
   defp sort_log_lines(lines, :asc), do: Enum.sort_by(lines, & &1.num, :asc)
-
-  defp log_type_class("assistant"), do: "bg-blue-900/50 text-blue-300"
-  defp log_type_class("system"), do: "bg-purple-900/50 text-purple-300"
-  defp log_type_class("result"), do: "bg-cyan-900/50 text-cyan-300"
-  defp log_type_class("error"), do: "bg-red-900/50 text-red-300"
-  defp log_type_class("tool_use"), do: "bg-green-900/50 text-green-300"
-  defp log_type_class("tool_result"), do: "bg-emerald-900/50 text-emerald-300"
-  defp log_type_class(_), do: "bg-gray-800/50 text-gray-400"
 
   defp read_team_inbox(run, team_name) do
     if run && run.workspace_path do
@@ -3879,142 +2680,20 @@ defmodule CortexWeb.RunDetailLive do
 
   defp run_title(run), do: run.name || "Untitled Run"
 
-  defp count_by_status(team_runs, statuses) when is_list(statuses) do
-    team_runs
-    |> Enum.reject(& &1.internal)
-    |> Enum.count(fn tr -> (tr.status || "pending") in statuses end)
-  end
-
-  defp count_by_status(team_runs, status) do
-    team_runs
-    |> Enum.reject(& &1.internal)
-    |> Enum.count(fn tr -> (tr.status || "pending") == status end)
-  end
-
-  defp sum_team_field(team_runs, field) do
-    team_runs
-    |> Enum.reject(& &1.internal)
-    |> Enum.map(&(Map.get(&1, field) || 0))
-    |> Enum.sum()
-  end
-
   defp prepend_activity(activities, entry) do
     [entry | activities] |> Enum.take(@max_activities)
-  end
-
-  defp filtered_activities(activities, nil), do: activities
-
-  defp filtered_activities(activities, team_name) do
-    Enum.filter(activities, fn entry -> entry.team == team_name end)
   end
 
   defp format_now do
     DateTime.utc_now() |> Calendar.strftime("%H:%M:%S")
   end
 
-  defp format_datetime(nil), do: "--"
-  defp format_datetime(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
-  defp format_datetime(%NaiveDateTime{} = ndt), do: Calendar.strftime(ndt, "%Y-%m-%d %H:%M:%S")
-  defp format_datetime(_), do: "--"
-
-  defp parse_run_config(run) do
-    with yaml when is_binary(yaml) <- run.config_yaml,
-         {:ok, config, _warnings} <- ConfigLoader.load_string(yaml) do
-      config
-    else
-      _ -> nil
-    end
-  end
-
   defp gossip?(run), do: run.mode == "gossip"
   defp mesh?(run), do: run.mode == "mesh"
-  defp non_dag?(run), do: gossip?(run) or mesh?(run)
-
-  # Terminology: gossip has "nodes", mesh has "agents", workflows have "teams"
-  defp participant_label(run, form) do
-    cond do
-      gossip?(run) -> gossip_label(form)
-      mesh?(run) -> mesh_label(form)
-      true -> team_label(form)
-    end
-  end
-
-  defp gossip_label(:singular), do: "node"
-  defp gossip_label(:plural), do: "Nodes"
-  defp gossip_label(:lower_plural), do: "nodes"
-
-  defp mesh_label(:singular), do: "agent"
-  defp mesh_label(:plural), do: "Agents"
-  defp mesh_label(:lower_plural), do: "agents"
-
-  defp team_label(:singular), do: "team"
-  defp team_label(:plural), do: "Teams"
-  defp team_label(:lower_plural), do: "teams"
 
   defp reconstruct_gossip_round(run) do
     if run.mode == "gossip" and run.gossip_rounds_total > 0 do
       %{current: run.gossip_rounds_completed || 0, total: run.gossip_rounds_total}
-    else
-      nil
-    end
-  end
-
-  defp topology_description("full_mesh", count),
-    do: "Every node shares knowledge with all #{count - 1} others each round"
-
-  defp topology_description("ring", _count),
-    do: "Each node shares knowledge with its two neighbors"
-
-  defp topology_description("random", _count),
-    do: "Each node shares knowledge with 2 random peers per round"
-
-  defp topology_description(other, _count),
-    do: "Nodes exchange knowledge via #{other} topology"
-
-  defp confidence_label(c) when c >= 0.8, do: "high confidence"
-  defp confidence_label(c) when c >= 0.5, do: "medium confidence"
-  defp confidence_label(_), do: "low confidence"
-
-  defp confidence_label_class(c) when c >= 0.8, do: "text-green-400"
-  defp confidence_label_class(c) when c >= 0.5, do: "text-yellow-400"
-  defp confidence_label_class(_), do: "text-red-400"
-
-  defp parse_gossip_info(run) do
-    if run.config_yaml do
-      case YamlElixir.read_from_string(run.config_yaml) do
-        {:ok, raw} ->
-          gossip = Map.get(raw, "gossip", %{})
-
-          %{
-            topology: Map.get(gossip, "topology", "random"),
-            rounds: Map.get(gossip, "rounds", 5),
-            exchange_interval: Map.get(gossip, "exchange_interval_seconds", 60)
-          }
-
-        _ ->
-          nil
-      end
-    else
-      nil
-    end
-  end
-
-  defp parse_mesh_info(run) do
-    if run.config_yaml do
-      case YamlElixir.read_from_string(run.config_yaml) do
-        {:ok, raw} ->
-          mesh = Map.get(raw, "mesh", %{})
-
-          %{
-            heartbeat: Map.get(mesh, "heartbeat_interval_seconds", 30),
-            suspect_timeout: Map.get(mesh, "suspect_timeout_seconds", 90),
-            dead_timeout: Map.get(mesh, "dead_timeout_seconds", 180),
-            cluster_context: Map.get(raw, "cluster_context")
-          }
-
-        _ ->
-          nil
-      end
     else
       nil
     end
@@ -4039,18 +2718,6 @@ defmodule CortexWeb.RunDetailLive do
       {tool, detail} -> "#{tool}: #{detail}"
     end)
   end
-
-  defp activity_icon(:tool), do: ">"
-  defp activity_icon(:progress), do: "*"
-  defp activity_icon(:message), do: "@"
-  defp activity_icon(:resume), do: "!"
-  defp activity_icon(_), do: "-"
-
-  defp activity_icon_class(:tool), do: "text-blue-400 font-mono"
-  defp activity_icon_class(:progress), do: "text-green-400 font-mono"
-  defp activity_icon_class(:message), do: "text-yellow-400 font-mono"
-  defp activity_icon_class(:resume), do: "text-purple-400 font-mono"
-  defp activity_icon_class(_), do: "text-gray-400 font-mono"
 
   defp non_empty(nil), do: nil
   defp non_empty(""), do: nil
@@ -4147,12 +2814,6 @@ defmodule CortexWeb.RunDetailLive do
       seconds < 3600 -> "#{div(seconds, 60)}m #{rem(seconds, 60)}s"
       true -> "#{div(seconds, 3600)}h #{rem(div(seconds, 60), 60)}m"
     end
-  end
-
-  defp elapsed_since(started_at) do
-    DateTime.diff(DateTime.utc_now(), started_at, :second)
-    |> max(0)
-    |> format_duration_seconds()
   end
 
   # -- Diagnostics helpers --
@@ -4319,80 +2980,6 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp os_pid_alive?(_), do: false
-
-  defp diag_banner_class(:in_progress), do: "bg-blue-950/30 border-blue-800 text-blue-300"
-  defp diag_banner_class(:completed), do: "bg-green-950/30 border-green-800 text-green-300"
-  defp diag_banner_class(:max_turns), do: "bg-yellow-950/30 border-yellow-800 text-yellow-300"
-  defp diag_banner_class(:empty_log), do: "bg-red-950/30 border-red-800 text-red-300"
-  defp diag_banner_class(:no_session), do: "bg-red-950/30 border-red-800 text-red-300"
-  defp diag_banner_class(:died_during_tool), do: "bg-red-950/30 border-red-800 text-red-300"
-
-  defp diag_banner_class(:died_after_tool_result),
-    do: "bg-red-950/30 border-red-800 text-red-300"
-
-  defp diag_banner_class(:log_ends_without_result),
-    do: "bg-red-950/30 border-red-800 text-red-300"
-
-  defp diag_banner_class(:error_during_execution),
-    do: "bg-red-950/30 border-red-800 text-red-300"
-
-  defp diag_banner_class(_), do: "bg-gray-900 border-gray-800 text-gray-300"
-
-  defp diag_icon(:in_progress), do: ">>"
-  defp diag_icon(:completed), do: "OK"
-  defp diag_icon(:max_turns), do: "!!"
-  defp diag_icon(:empty_log), do: "XX"
-  defp diag_icon(:no_session), do: "XX"
-  defp diag_icon(:error_during_execution), do: "!!"
-  defp diag_icon(:died_during_tool), do: "!!"
-  defp diag_icon(:died_after_tool_result), do: "!!"
-  defp diag_icon(:log_ends_without_result), do: "!!"
-  defp diag_icon(_), do: "??"
-
-  defp diag_title(:in_progress), do: "Still Running"
-  defp diag_title(:completed), do: "Completed Successfully"
-  defp diag_title(:max_turns), do: "Hit Max Turns"
-  defp diag_title(:empty_log), do: "Empty Log — Never Started"
-  defp diag_title(:no_session), do: "No Session — Crashed on Startup"
-  defp diag_title(:error_during_execution), do: "Error During Execution"
-  defp diag_title(:died_during_tool), do: "Died During Tool Execution"
-  defp diag_title(:died_after_tool_result), do: "Died After Tool Result"
-  defp diag_title(:log_ends_without_result), do: "Log Ends Without Result"
-  defp diag_title(:exited), do: "Exited with Error"
-  defp diag_title(_), do: "Unknown Status"
-
-  defp diag_entry_class(:session_start), do: "bg-purple-900/60 text-purple-300"
-  defp diag_entry_class(:thinking), do: "bg-gray-800/60 text-gray-400"
-  defp diag_entry_class(:text), do: "bg-blue-900/60 text-blue-300"
-  defp diag_entry_class(:tool_use), do: "bg-green-900/60 text-green-300"
-  defp diag_entry_class(:tool_start), do: "bg-green-900/60 text-green-300"
-  defp diag_entry_class(:tool_result), do: "bg-emerald-900/60 text-emerald-300"
-  defp diag_entry_class(:tool_error), do: "bg-red-900/60 text-red-300"
-  defp diag_entry_class(:result), do: "bg-cyan-900/60 text-cyan-300"
-  defp diag_entry_class(:end_turn), do: "bg-gray-800/60 text-gray-400"
-  defp diag_entry_class(:parse_error), do: "bg-red-900/60 text-red-300"
-  defp diag_entry_class(_), do: "bg-gray-800/60 text-gray-400"
-
-  defp diag_entry_label(:session_start), do: "session"
-  defp diag_entry_label(:thinking), do: "thinking"
-  defp diag_entry_label(:text), do: "text"
-  defp diag_entry_label(:tool_use), do: "tool"
-  defp diag_entry_label(:tool_start), do: "tool"
-  defp diag_entry_label(:tool_result), do: "result"
-  defp diag_entry_label(:tool_error), do: "error"
-  defp diag_entry_label(:result), do: "done"
-  defp diag_entry_label(:end_turn), do: "end"
-  defp diag_entry_label(:parse_error), do: "parse err"
-  defp diag_entry_label(type), do: Atom.to_string(type)
-
-  defp format_iso_time(nil), do: ""
-
-  defp format_iso_time(iso_string) do
-    case DateTime.from_iso8601(iso_string) do
-      {:ok, dt, _} -> Calendar.strftime(dt, "%H:%M:%S")
-      _ -> iso_string
-    end
-  end
 
   # -- Per-team health indicators --
 
