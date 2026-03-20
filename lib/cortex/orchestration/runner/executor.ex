@@ -343,8 +343,6 @@ defmodule Cortex.Orchestration.Runner.Executor do
          run_id,
          acc
        ) do
-    broadcast(:tier_started, %{tier: tier_index, teams: team_names})
-
     {:ok, state} = Workspace.read_state(workspace)
 
     now = DateTime.utc_now() |> DateTime.to_iso8601()
@@ -353,7 +351,10 @@ defmodule Cortex.Orchestration.Runner.Executor do
       Workspace.update_team_state(workspace, name, status: "running")
       Workspace.update_registry_entry(workspace, name, status: "running", started_at: now)
       upsert_team_run_record(run_id, name, config, state, workspace, tier_index)
+      broadcast(:team_started, %{team: name, tier: tier_index, run_id: run_id})
     end)
+
+    broadcast(:tier_started, %{tier: tier_index, teams: team_names})
 
     outcomes =
       team_names
@@ -364,9 +365,10 @@ defmodule Cortex.Orchestration.Runner.Executor do
       end)
       |> Task.await_many(@default_task_timeout_ms)
 
-    Enum.each(outcomes, fn outcome ->
+    Enum.each(outcomes, fn {name, _status, _data} = outcome ->
       Outcomes.apply_outcome(workspace, outcome)
       Outcomes.apply_store_outcome(run_id, outcome)
+      broadcast(:team_completed, %{team: name, tier: tier_index, run_id: run_id})
     end)
 
     failures =
