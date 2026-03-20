@@ -729,6 +729,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
       team_states = Map.values(state.teams)
 
       totals = aggregate_team_totals(team_states)
+      now = DateTime.utc_now()
 
       case Cortex.Store.get_run(run_id) do
         nil ->
@@ -743,9 +744,17 @@ defmodule Cortex.Orchestration.Runner.Executor do
             total_cache_read_tokens: totals.cache_read_tokens,
             total_cache_creation_tokens: totals.cache_creation_tokens,
             total_duration_ms: run_duration,
-            completed_at: DateTime.utc_now()
+            completed_at: now
           })
       end
+
+      # Mark any still-running internal team_runs (coordinator etc.) as completed
+      run_id
+      |> Cortex.Store.get_team_runs()
+      |> Enum.filter(fn tr -> tr.internal and tr.status == "running" end)
+      |> Enum.each(fn tr ->
+        Cortex.Store.update_team_run(tr, %{status: "completed", completed_at: now})
+      end)
     end)
   end
 
@@ -753,6 +762,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
   defp persist_failed_run(run_id, run_duration) do
     RunnerStore.safe_call(fn ->
+      now = DateTime.utc_now()
+
       case Cortex.Store.get_run(run_id) do
         nil ->
           :ok
@@ -761,9 +772,17 @@ defmodule Cortex.Orchestration.Runner.Executor do
           Cortex.Store.update_run(run, %{
             status: "failed",
             total_duration_ms: run_duration,
-            completed_at: DateTime.utc_now()
+            completed_at: now
           })
       end
+
+      # Mark any still-running internal team_runs as stopped
+      run_id
+      |> Cortex.Store.get_team_runs()
+      |> Enum.filter(fn tr -> tr.internal and tr.status == "running" end)
+      |> Enum.each(fn tr ->
+        Cortex.Store.update_team_run(tr, %{status: "stopped", completed_at: now})
+      end)
     end)
   end
 

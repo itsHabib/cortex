@@ -56,6 +56,8 @@ defmodule CortexWeb.RunDetailLive do
            current_tab: "overview",
            last_seen: %{},
            message_flows: %{flows: [], total: 0, by_agent: %{}},
+           membership_view: "list",
+           selected_graph_node: nil,
            selected_log_team: nil,
            log_lines: nil,
            log_sort: :desc,
@@ -118,6 +120,7 @@ defmodule CortexWeb.RunDetailLive do
            current_tab: "overview",
            last_seen: %{},
            message_flows: %{flows: [], total: 0, by_agent: %{}},
+           membership_view: "list",
            log_sort: :desc,
            selected_log_team: nil,
            log_lines: nil,
@@ -656,6 +659,20 @@ defmodule CortexWeb.RunDetailLive do
       Helpers.aggregate_message_flows(run && run.workspace_path, agent_names)
 
     {:noreply, assign(socket, current_tab: "membership", message_flows: flows)}
+  end
+
+  def handle_event("set_membership_view", %{"view" => view}, socket) do
+    {:noreply, assign(socket, membership_view: view)}
+  end
+
+  def handle_event("select_graph_node", %{"name" => ""}, socket) do
+    {:noreply, assign(socket, selected_graph_node: nil)}
+  end
+
+  def handle_event("select_graph_node", %{"name" => name}, socket) do
+    # Toggle: click again to deselect
+    current = socket.assigns[:selected_graph_node]
+    {:noreply, assign(socket, selected_graph_node: if(current == name, do: nil, else: name))}
   end
 
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
@@ -1561,7 +1578,7 @@ defmodule CortexWeb.RunDetailLive do
       </div>
 
       <div :if={@current_tab == "membership"}>
-        <.membership_tab run={@run} team_runs={@team_runs} last_seen={@last_seen} pid_status={@pid_status} message_flows={@message_flows} />
+        <.membership_tab run={@run} team_runs={@team_runs} last_seen={@last_seen} pid_status={@pid_status} message_flows={assigns[:message_flows] || %{flows: [], total: 0, by_agent: %{}}} membership_view={assigns[:membership_view] || "list"} selected_graph_node={assigns[:selected_graph_node]} />
       </div>
 
       <div :if={@current_tab == "knowledge"}>
