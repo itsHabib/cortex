@@ -1,0 +1,76 @@
+phase: "Gateway Distribution"
+
+goal: >
+  Make the Gateway layer cluster-aware — external agents connected via
+  WebSocket or gRPC to any node are routable from every node. No single
+  point of failure for agent connectivity.
+
+system_context: |
+  Cortex has a Gateway subsystem (built in Cluster Mode Phases 1-2) that
+  allows external agents to register via WebSocket and communicate over gRPC.
+
+  Current architecture:
+  - WebSocket endpoint at /agent for registration + heartbeat
+  - gRPC server on :4001 for TaskRequest/TaskResult streaming
+  - Gateway.Registry (local GenServer) tracks connected agents
+  - Go sidecar binary connects external agents to Cortex
+
+  Problem: if an external agent connects to node A, node B can't route
+  work to it. The Gateway.Registry is node-local.
+
+  By this phase, we have: BEAM clustering (Phase 1), distributed process
+  registries via Horde (Phase 2), and PostgreSQL (Phase 3).
+
+dependencies:
+  - PROJECT.md
+  - docs/dist-control-plane/phase-2-distributed-state/plans/
+  - docs/cluster-mode/phase-1/plans/    # original Gateway design
+  - docs/cluster-mode/phase-2/plans/    # gRPC + sidecar design
+  - lib/cortex/gateway/
+  - lib/cortex/gateway/registry.ex
+  - lib/cortex/gateway/grpc_server.ex
+
+plans_dir: docs/dist-control-plane/phase-4-gateway/plans
+content_dir: docs/dist-control-plane/phase-4-gateway/content
+
+teammates:
+  - role: "Connection Distribution Architect"
+    doc: connection-distribution.md
+    focus: |
+      - Design distributed Gateway.Registry — migrate from local GenServer
+        to Horde or :pg-backed registry
+      - Handle connection ownership: WebSocket lives on one node, but agent
+        must be addressable from any node
+      - Plan cross-node message forwarding: node B needs to send TaskRequest
+        to agent connected to node A
+      - Design reconnection behavior: if a node dies, external agents
+        reconnect to another node — handle re-registration gracefully
+      - Ensure sidecar doesn't need changes (or minimal changes) — the
+        distribution should be transparent to external agents
+
+  - role: "Load Balancing & Ingress Engineer"
+    doc: load-balancing.md
+    focus: |
+      - Design the ingress layer for WebSocket + gRPC across N replicas
+      - Evaluate sticky sessions vs. distributed routing:
+        - Sticky: simpler, but creates hotspots and failover complexity
+        - Distributed: any node routes to any agent, but adds hop latency
+      - Plan K8s Service configuration: headless service for BEAM clustering,
+        regular service for HTTP/gRPC ingress
+      - Handle health checks: readiness (node in cluster) vs liveness
+        (process alive) for K8s probes
+      - Design the external-facing endpoint topology:
+        one LoadBalancer or separate for HTTP/WS/gRPC?
+
+  - role: "gRPC Routing Engineer"
+    doc: grpc-routing.md
+    focus: |
+      - Design cross-node gRPC stream management — a stream opened on
+        node A, work dispatched from node B
+      - Plan the internal forwarding protocol: how does node B ask node A
+        to send a TaskRequest over an existing gRPC stream?
+      - Handle stream lifecycle across node failures: stream dies when
+        node dies — what happens to in-flight tasks?
+      - Evaluate gRPC load balancing: client-side (sidecar picks node)
+        vs. proxy-side (K8s/envoy routes)
+      - Ensure proto contract (gateway.proto) doesn't need breaking changes

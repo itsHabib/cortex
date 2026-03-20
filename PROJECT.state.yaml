@@ -123,6 +123,41 @@ tracks:
         commit: 911d415
         notes: "Gossip graph view, shared message_flow_summary component, AI summary --system-prompt fix"
 
+  dist-control-plane:
+    description: "Distributed control plane — N replicas, shared state, K8s-ready"
+    status: pending
+    depends_on: [cluster-mode]
+    phases:
+      phase-1-clustering:
+        config: docs/dist-control-plane/phase-1-clustering/kickoff.yaml
+        status: next
+        notes: "libcluster, node discovery, PubSub verification, runtime config"
+      phase-2-distributed-state:
+        config: docs/dist-control-plane/phase-2-distributed-state/kickoff.yaml
+        status: pending
+        depends_on: [phase-1-clustering]
+        notes: "Horde registry + DynamicSupervisor, singleton election, process handoff"
+      phase-3-database:
+        config: docs/dist-control-plane/phase-3-database/kickoff.yaml
+        status: pending
+        depends_on: [phase-2-distributed-state]
+        notes: "SQLite → PostgreSQL, schema migration, connection pooling"
+      phase-4-gateway:
+        config: docs/dist-control-plane/phase-4-gateway/kickoff.yaml
+        status: pending
+        depends_on: [phase-2-distributed-state]
+        notes: "Distributed Gateway.Registry, cross-node agent routing, load balancing"
+      phase-5-k8s-infra:
+        config: docs/dist-control-plane/phase-5-k8s-infra/kickoff.yaml
+        status: pending
+        depends_on: [phase-3-database, phase-4-gateway]
+        notes: "Helm chart, HPA, SRE dashboards, operator runbooks"
+      phase-6-verification:
+        config: docs/dist-control-plane/phase-6-verification/kickoff.yaml
+        status: pending
+        depends_on: [phase-5-k8s-infra]
+        notes: "Multi-node test harness, chaos engineering, e2e lifecycle validation"
+
   standalone:
     description: "Independent features — no team kickoff required"
     status: in_progress

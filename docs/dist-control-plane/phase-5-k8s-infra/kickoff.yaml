@@ -1,0 +1,89 @@
+phase: "Kubernetes & SRE"
+
+goal: >
+  Make Cortex production-ready on Kubernetes — Helm chart, deployment
+  manifests, autoscaling, observability at cluster level, operational
+  runbooks, and a smooth operator experience from deploy to day-2 ops.
+
+system_context: |
+  Cortex is now a distributed Elixir/OTP application: N BEAM nodes
+  clustered via libcluster, Horde for distributed state, PostgreSQL
+  for persistence, and a distributed Gateway for external agents.
+
+  Existing infra:
+  - Prometheus metrics already exported at /metrics (telemetry_metrics_prometheus_core)
+  - Phoenix LiveDashboard available
+  - Dockerfile likely needed (or existing — check mix release config)
+  - SpawnBackend.K8s is planned (compute spawning phase 4) — this phase
+    focuses on the CONTROL PLANE infra, not the compute plane
+
+  This phase is about the operational side: how do you deploy, scale,
+  monitor, and operate a Cortex cluster in production?
+
+dependencies:
+  - PROJECT.md
+  - docs/dist-control-plane/phase-1-clustering/plans/
+  - docs/dist-control-plane/phase-4-gateway/plans/
+  - lib/cortex/telemetry.ex
+  - config/runtime.exs
+
+plans_dir: docs/dist-control-plane/phase-5-k8s-infra/plans
+content_dir: docs/dist-control-plane/phase-5-k8s-infra/content
+
+teammates:
+  - role: "Helm & Deployment Engineer"
+    doc: helm-deployment.md
+    focus: |
+      - Design the Helm chart structure: values.yaml, templates,
+        configurable replicas, resource limits
+      - Choose Deployment vs StatefulSet — BEAM clustering often wants
+        stable network identities (StatefulSet) for epmd/libcluster
+      - Design the Dockerfile and mix release pipeline: multi-stage build,
+        minimal runtime image, health check binary
+      - Plan service topology:
+        - Headless Service for BEAM node discovery (libcluster K8s DNS)
+        - ClusterIP Service for internal HTTP/gRPC
+        - LoadBalancer/Ingress for external dashboard + Gateway
+      - Handle secrets: PG credentials, RELEASE_COOKIE, API keys
+        (K8s Secrets / external-secrets-operator)
+
+  - role: "SRE & Observability Engineer"
+    doc: sre-observability.md
+    focus: |
+      - Design cluster-level Grafana dashboards: node count, process
+        distribution, Horde sync lag, PubSub cross-node latency
+      - Plan distributed tracing: OpenTelemetry for cross-node request
+        flows (agent spawn on A → tool exec on B → result to C)
+      - Design alerting rules: node departure, singleton failover,
+        registry conflict storms, PG connection pool exhaustion
+      - Plan log aggregation strategy: structured logging with node_id,
+        ship to Loki/ELK
+      - Extend existing /metrics endpoint with cluster-specific metrics:
+        cluster_size, horde_sync_duration, cross_node_message_latency
+
+  - role: "Scaling & Reliability Engineer"
+    doc: scaling-reliability.md
+    focus: |
+      - Design HPA (Horizontal Pod Autoscaler) — what metric drives scaling?
+        (CPU? agent count? queue depth? custom metric via Prometheus adapter?)
+      - Plan PodDisruptionBudget: minimum cluster size during rolling updates
+      - Design rolling update strategy: how to drain a node gracefully
+        (process handoff → deregister → shutdown)
+      - Plan resource limits and requests: CPU/memory per replica based
+        on agent count expectations
+      - Handle cluster scaling edge cases: scale-down kills node with
+        singleton → failover time. Scale-up → Horde rebalance storm.
+
+  - role: "Operator Experience Engineer"
+    doc: operator-experience.md
+    focus: |
+      - Design the operator runbook: deploy, upgrade, rollback, scale,
+        debug common issues
+      - Plan the CLI experience: mix tasks or cortex CLI commands for
+        cluster inspection (list nodes, show process distribution, etc.)
+      - Design the day-2 operations: backup/restore PG, rotate RELEASE_COOKIE,
+        add/remove nodes, emergency single-node fallback
+      - Plan upgrade path: how to go from single-node SQLite Cortex to
+        clustered PostgreSQL Cortex without data loss
+      - Document the "break glass" procedures: force-remove stuck node,
+        reset Horde state, manual singleton election

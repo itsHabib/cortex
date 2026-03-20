@@ -1,0 +1,76 @@
+phase: "Verification & Chaos"
+
+goal: >
+  Prove the distributed control plane works under failure — multi-node
+  integration tests, chaos scenarios, netsplit handling, and end-to-end
+  validation of the full cluster lifecycle.
+
+system_context: |
+  Cortex is now a distributed Elixir/OTP application deployed on Kubernetes
+  with N BEAM nodes, Horde-managed state, PostgreSQL, and a distributed
+  Gateway. All previous phases built the machinery — this phase proves it
+  works and breaks gracefully when things go wrong.
+
+  Elixir has excellent multi-node testing support:
+  - :peer module (OTP 25+) for spinning up connected nodes in tests
+  - :net_kernel for simulating netsplits (disconnect/reconnect)
+  - Horde has known edge cases around netsplit recovery
+
+  The existing test suite has 655 tests running in 8.2s — all single-node.
+  This phase adds the distributed test layer on top.
+
+dependencies:
+  - PROJECT.md
+  - docs/dist-control-plane/phase-1-clustering/plans/
+  - docs/dist-control-plane/phase-2-distributed-state/plans/
+  - docs/dist-control-plane/phase-4-gateway/plans/
+  - docs/dist-control-plane/phase-5-k8s-infra/plans/
+
+plans_dir: docs/dist-control-plane/phase-6-verification/plans
+content_dir: docs/dist-control-plane/phase-6-verification/content
+
+teammates:
+  - role: "Test Harness Architect"
+    doc: test-harness.md
+    focus: |
+      - Design the multi-node test infrastructure using :peer module
+      - Build ExUnit helpers: start_cluster(n), stop_node(node),
+        partition(node_a, node_b), heal_partition()
+      - Plan test isolation: each test gets its own mini-cluster,
+        no shared state between tests
+      - Handle CI considerations: multi-node tests are slower —
+        separate test tag (:distributed) so they can run independently
+      - Design test fixtures: pre-configured clusters with agents,
+        runs, and Gateway connections for scenario tests
+
+  - role: "Chaos Engineer"
+    doc: chaos-engineer.md
+    focus: |
+      - Design chaos scenarios that cover real failure modes:
+        1. Kill a non-leader node mid-run → agents restart on survivors
+        2. Kill the singleton leader → new election, run continues
+        3. Netsplit (2+1) → both partitions function → heal → reconverge
+        4. PG goes down → circuit breaker → PG recovers → resume
+        5. All nodes restart simultaneously → cluster reforms from zero
+      - Plan property-based testing for distributed invariants:
+        "no two nodes own the same agent simultaneously"
+      - Design the chaos test runner: automated, repeatable, CI-friendly
+      - Handle Horde-specific edge cases: CRDT conflict resolution after
+        netsplit, registry oscillation, process duplication
+
+  - role: "End-to-End Validation Engineer"
+    doc: e2e-validation.md
+    focus: |
+      - Design full lifecycle tests:
+        1. Boot 3-node cluster → run DAG orchestration → verify all agents
+           complete → results consistent from any node
+        2. Boot cluster → connect external agent via Gateway → route work
+           from different node → verify results
+        3. Scale from 1 → 3 nodes mid-run → new node picks up work
+        4. Scale from 3 → 1 nodes mid-run → surviving node has all state
+      - Plan dashboard verification: LiveView works correctly when
+        connected to any node, shows cluster-wide state
+      - Design perf benchmarks: single-node baseline vs. 3-node cluster
+        for DAG, mesh, and gossip orchestration modes
+      - Validate the upgrade path: single-node SQLite → clustered PG
+        end-to-end with real data

@@ -1,0 +1,69 @@
+phase: "Database Migration"
+
+goal: >
+  Migrate from SQLite to PostgreSQL so all Cortex replicas share a single
+  source of truth for persistent state — events, run history, and workspace
+  metadata.
+
+system_context: |
+  Cortex uses Ecto with ecto_sqlite3 for persistence. The database stores
+  orchestration events (EventSink), run metadata, and workspace state.
+
+  SQLite is single-writer and file-local — it cannot be shared across N
+  replicas. PostgreSQL is the standard move for multi-node Ecto apps.
+
+  The good news: Ecto abstracts the adapter, so most application code
+  won't change. The work is in schema review, migration scripts, connection
+  pooling, and ensuring the dev experience stays smooth (SQLite for dev,
+  Postgres for prod is a valid pattern).
+
+  Current DB usage is relatively light — the system is process-heavy, not
+  DB-heavy. Most coordination happens via OTP processes and PubSub.
+
+dependencies:
+  - PROJECT.md
+  - docs/dist-control-plane/phase-2-distributed-state/plans/
+  - lib/cortex/repo.ex
+  - lib/cortex/store/event_sink.ex
+  - priv/repo/migrations/
+
+plans_dir: docs/dist-control-plane/phase-3-database/plans
+content_dir: docs/dist-control-plane/phase-3-database/content
+
+teammates:
+  - role: "Schema Architect"
+    doc: schema-architect.md
+    focus: |
+      - Audit current SQLite schema and identify PostgreSQL-incompatible
+        patterns (JSON columns, type affinity, autoincrement vs serial)
+      - Design the PostgreSQL schema — leverage PG features where they
+        help (JSONB, partial indexes, advisory locks, LISTEN/NOTIFY)
+      - Plan the migration file strategy: rewrite from scratch or
+        incremental adapter swap?
+      - Evaluate whether PG LISTEN/NOTIFY can supplement or replace
+        some PubSub usage for DB-level events
+      - Handle schema for multi-node: add node_id columns where needed
+        for tracking which node owns what
+
+  - role: "Data Migration Engineer"
+    doc: data-migration.md
+    focus: |
+      - Design the data portability path: export SQLite → import PostgreSQL
+      - Handle zero-downtime migration for existing single-node deployments
+        upgrading to clustered mode
+      - Plan the dev experience: should dev stay on SQLite or move to
+        PG everywhere? (Docker Compose for local PG)
+      - Write the migration runbook: step-by-step for operators
+      - Handle rollback: if PG migration fails, can we fall back to SQLite?
+
+  - role: "Connection & Performance Engineer"
+    doc: connection-performance.md
+    focus: |
+      - Design connection pooling strategy: DBConnection pool size per node,
+        total pool budget across cluster
+      - Plan for N nodes × M connections — avoid overwhelming PG
+      - Evaluate PgBouncer vs built-in Ecto pooling for the cluster case
+      - Benchmark: current SQLite perf baseline → PostgreSQL target
+        (event writes, run queries, workspace operations)
+      - Design connection health checks and circuit breaking for
+        PG connectivity failures
