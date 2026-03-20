@@ -120,14 +120,15 @@ tracks:
 
   standalone:
     description: "Independent features — no team kickoff required"
-    status: pending
+    status: in_progress
     phases:
       gossip-liveview:
-        status: next
-        plan: docs/next-session/PLAN.md
+        status: done
+        completed: 2026-03-20
+        commit: 911d415
         notes: "Mesh graph visualization for gossip sessions (/gossip/:id page)"
       dynamic-cluster-join:
-        status: pending
+        status: next
         plan: docs/next-session/PLAN.md
         depends_on: [gossip-liveview]
         notes: "SessionRunner GenServer refactor, join/2 API, knowledge catch-up"
