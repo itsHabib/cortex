@@ -1,0 +1,133 @@
+# Cortex Project State
+#
+# Tracks completion status across all work streams and phases.
+# Updated by /team-kickoff and /team-code-execute on phase completion.
+# Read by /where-are-we to show current status and next steps.
+#
+# Status values: done | in_progress | next | pending | blocked
+#   done        — phase fully shipped (code merged, tests pass)
+#   in_progress — kickoff or execution actively running
+#   next        — all dependencies met, ready to start
+#   pending     — waiting on dependencies, not yet actionable
+#   blocked     — explicitly blocked (see notes)
+
+project: cortex
+updated: 2026-03-20
+
+tracks:
+  core-phases:
+    description: "Original OTP foundation through polish (Phases 1–11)"
+    status: done
+    phases:
+      01-otp-foundation:          { status: done }
+      02-otp-foundation-qe:       { status: done }
+      03-dag-orchestration:       { status: done }
+      04-dag-orchestration-qe:    { status: done }
+      05-liveview-dashboard:      { status: done }
+      06-liveview-dashboard-qe:   { status: done }
+      07-gossip-advanced:         { status: done }
+      08-gossip-advanced-qe:      { status: done }
+      09-performance:             { status: done }
+      10-sre:                     { status: done }
+      11-polish:                  { status: done }
+
+  compute-spawning:
+    description: "Provider & SpawnBackend abstractions for remote compute"
+    project_doc: docs/compute-spawning/PROJECT.md
+    status: in_progress
+    phases:
+      phase-1-foundation:
+        config: docs/compute-spawning/phase-1-foundation/kickoff.yaml
+        status: done
+        completed: 2026-03-19
+        commit: fa363d9
+        notes: "Provider/SpawnBackend behaviours, Provider.CLI + SpawnBackend.Local, config + orchestration wired"
+      phase-2-http-provider:
+        config: docs/compute-spawning/phase-2-http-provider/kickoff.yaml
+        status: next
+        depends_on: [phase-1-foundation]
+        notes: "Provider.HTTP — call Claude Messages API directly with agentic loop"
+      phase-3-remote-backends:
+        config: docs/compute-spawning/phase-3-remote-backends/kickoff.yaml
+        status: next
+        depends_on: [phase-1-foundation]
+        notes: "SpawnBackend.Docker and SpawnBackend.K8s with agent+sidecar co-deployment"
+
+  cluster-mode:
+    description: "Agent mesh with external registration, gRPC data plane, sidecar"
+    project_doc: docs/cluster-mode/PROJECT.md
+    status: in_progress
+    phases:
+      phase-1-agent-gateway:
+        config: docs/cluster-mode/phase-1-agent-gateway/kickoff.yaml
+        status: done
+        completed: 2026-03-18
+        commit: 704edf6
+        notes: "WebSocket gateway, registry, registration protocol, integration tests"
+      phase-2-sidecar:
+        config: docs/cluster-mode/phase-2-sidecar/kickoff-v2-grpc.yaml
+        status: done
+        completed: 2026-03-18
+        commit: d596af3
+        notes: "gRPC server, proto contract, Go sidecar binary, e2e tests"
+      phase-2.5-mesh-ui:
+        status: done
+        completed: 2026-03-18
+        commit: a835b3d
+        notes: "Cluster LiveView for real-time gateway agent monitoring"
+      phase-3-agent-mesh:
+        config: docs/cluster-mode/phase-3-agent-mesh/kickoff.yaml
+        status: next
+        depends_on: [phase-2-sidecar]
+        notes: "Agent-to-agent tool use, capability discovery, Provider.External integration"
+
+  ui-restructure:
+    description: "Redesign navigation from 7 to 4 nav items with component system"
+    status: done
+    phases:
+      wave-1:
+        config: docs/ui-restructure/wave1-execute.yaml
+        status: done
+        completed: 2026-03-19
+        commit: 44cdfe5
+        notes: "New nav structure, pages, component extraction"
+      wave-2:
+        config: docs/ui-restructure/wave2-execute.yaml
+        status: done
+        completed: 2026-03-19
+        commit: d81a97e
+        notes: "UI integration tests for all example YAMLs and templates"
+
+  ui-bug-smash:
+    description: "UI bug fixes, animated mesh/gossip graphs, composable components"
+    status: done
+    phases:
+      broadcast-fix:
+        status: done
+        completed: 2026-03-20
+        commit: 534d9fa
+        notes: "Fix broadcast ordering so DAG graph shows running nodes and team selector populates"
+      mesh-graph:
+        status: done
+        completed: 2026-03-20
+        commit: 98eb900
+        notes: "Animated communication graph with clickable nodes, List/Graph toggle, themed colors"
+      gossip-graph:
+        status: done
+        completed: 2026-03-20
+        commit: 911d415
+        notes: "Gossip graph view, shared message_flow_summary component, AI summary --system-prompt fix"
+
+  standalone:
+    description: "Independent features — no team kickoff required"
+    status: pending
+    phases:
+      gossip-liveview:
+        status: next
+        plan: docs/next-session/PLAN.md
+        notes: "Mesh graph visualization for gossip sessions (/gossip/:id page)"
+      dynamic-cluster-join:
+        status: pending
+        plan: docs/next-session/PLAN.md
+        depends_on: [gossip-liveview]
+        notes: "SessionRunner GenServer refactor, join/2 API, knowledge catch-up"
