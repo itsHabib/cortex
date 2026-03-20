@@ -6,7 +6,21 @@ It supports three coordination modes: **DAG orchestration** for structured, depe
 
 Built on Elixir/OTP because the problem is inherently concurrent — dozens of long-lived agent processes, message routing, failure detection, real-time streaming. OTP provides supervision trees, GenServers, Erlang ports, PubSub, and Phoenix LiveView out of the box. Every piece of infrastructure that would need to be hand-rolled in other stacks comes for free.
 
+![Mesh — animated communication graph](priv/static/images/mesh-overview.jpg)
+
+<details>
+<summary>More screenshots</summary>
+
+### DAG Workflow
 ![DAG overview — run in progress](priv/static/images/dag-overview.jpg)
+
+### Gossip Protocol
+![Gossip — topology and knowledge exchange](priv/static/images/gossip-overview.jpg)
+
+### Logs
+![Logs — structured NDJSON output](priv/static/images/logs-overview.jpg)
+
+</details>
 
 ## Table of Contents
 
