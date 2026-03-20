@@ -1,0 +1,64 @@
+phase: "Clustering Foundation"
+
+goal: >
+  Design the BEAM clustering layer — node discovery, connection management,
+  and verified cross-node PubSub — so that N Cortex replicas form a single
+  logical cluster automatically.
+
+system_context: |
+  Cortex is an Elixir/OTP multi-agent orchestration system built on Phoenix
+  LiveView. Currently runs as a single node with local Registry,
+  DynamicSupervisor, Phoenix.PubSub, and Ecto + SQLite.
+
+  The control plane manages agent lifecycles, orchestration runs (DAG, mesh,
+  gossip modes), messaging/mailboxes, a Gateway for external agents (WebSocket
+  + gRPC), and a real-time LiveView dashboard.
+
+  This is Phase 1 of the Distributed Control Plane workstream. The goal is to
+  get N nodes talking to each other reliably before moving state distribution
+  (Phase 2) or database migration (Phase 3).
+
+  Key constraint: everything must remain backwards-compatible with single-node
+  mode. A lone node should work exactly as it does today.
+
+dependencies:
+  - PROJECT.md
+  - docs/cluster-mode/phase-1/plans/    # existing Gateway + WebSocket work
+  - lib/cortex/application.ex            # current supervision tree
+  - config/config.exs                    # current config structure
+
+plans_dir: docs/dist-control-plane/phase-1-clustering/plans
+content_dir: docs/dist-control-plane/phase-1-clustering/content
+
+teammates:
+  - role: "Clustering Architect"
+    doc: clustering-architect.md
+    focus: |
+      - Evaluate and select libcluster strategies for node discovery
+        (K8s DNS, gossip/UDP, epmd for dev)
+      - Design the node connection lifecycle: join, heartbeat, leave, netsplit
+      - Define the cluster topology config schema (how operators configure
+        clustering in config/runtime.exs)
+      - Plan graceful degradation: what happens when a node loses quorum?
+      - Ensure single-node mode remains the zero-config default
+
+  - role: "PubSub & Comms Engineer"
+    doc: pubsub-comms.md
+    focus: |
+      - Verify Phoenix.PubSub works across connected BEAM nodes (PG2 adapter)
+      - Audit all current PubSub topic patterns and ensure they work cross-node
+      - Design any new topics needed for cluster membership events
+        (node_join, node_leave, node_down)
+      - Plan LiveView subscription behavior when the backing node changes
+      - Test broadcast latency and ordering guarantees across nodes
+
+  - role: "Config & Runtime Engineer"
+    doc: config-runtime.md
+    focus: |
+      - Design runtime.exs configuration for cluster mode
+        (node name, cookie, discovery strategy, ports)
+      - Environment-aware defaults: dev (epmd localhost), staging (gossip),
+        prod (K8s DNS)
+      - Plan the release configuration (mix release) for clustered deployment
+      - Handle RELEASE_NODE, RELEASE_COOKIE, and RELEASE_DISTRIBUTION env vars
+      - Document the operator experience: "how do I turn on clustering?"

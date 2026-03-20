@@ -1,0 +1,89 @@
+phase: "Distributed State"
+
+goal: >
+  Migrate all process registries and dynamic supervisors from local (single-node)
+  to distributed (Horde), implement singleton election for coordinator processes,
+  and ensure agent/mailbox/runner processes are discoverable from any node.
+
+system_context: |
+  Cortex is an Elixir/OTP multi-agent orchestration system. Phase 1 established
+  BEAM clustering via libcluster — nodes discover and connect automatically.
+
+  Currently these are LOCAL to a single node:
+  - Cortex.Agent.Registry (Registry) — agent UUID -> pid
+  - Cortex.Orchestration.RunnerRegistry (Registry) — run_id -> runner pid
+  - Cortex.Messaging.MailboxRegistry (Registry) — agent_id -> mailbox pid
+  - Cortex.Agent.Supervisor (DynamicSupervisor) — spawned agents
+  - Cortex.Messaging.Supervisor (DynamicSupervisor) — per-agent mailboxes
+
+  These SINGLETONS must run exactly once across the cluster:
+  - Cortex.Messaging.Router
+  - Cortex.WorkspaceLock
+  - Cortex.Store.EventSink
+  - Cortex.Tool.Registry
+
+  The gossip protocol already uses CRDTs (Cortex.Gossip.KnowledgeStore),
+  so the team has familiarity with eventual consistency patterns.
+
+dependencies:
+  - PROJECT.md
+  - docs/dist-control-plane/phase-1-clustering/plans/
+  - lib/cortex/agent/registry.ex
+  - lib/cortex/agent/supervisor.ex
+  - lib/cortex/messaging/supervisor.ex
+  - lib/cortex/messaging/router.ex
+  - lib/cortex/application.ex
+
+plans_dir: docs/dist-control-plane/phase-2-distributed-state/plans
+content_dir: docs/dist-control-plane/phase-2-distributed-state/content
+
+teammates:
+  - role: "Registry Architect"
+    doc: registry-architect.md
+    focus: |
+      - Plan migration from local Registry to Horde.Registry for all three
+        registries (Agent, Runner, Mailbox)
+      - Design the API compatibility layer so callers don't change
+      - Handle registry conflicts: what happens when two nodes register
+        the same agent_id? (CRDT resolution strategy)
+      - Plan the delta-CRDT sync interval and consistency tradeoffs
+      - Ensure Registry.lookup, Registry.select, and via-tuples all work
+
+  - role: "Supervision Architect"
+    doc: supervision-architect.md
+    focus: |
+      - Plan migration from DynamicSupervisor to Horde.DynamicSupervisor
+        for Agent.Supervisor and Messaging.Supervisor
+      - Design process placement strategy: round-robin, load-based, or
+        affinity-based (keep agent + mailbox on same node)
+      - Plan process handoff when a node goes down — automatic restart
+        on surviving nodes
+      - Handle the race between process restart and registry cleanup
+      - Ensure Task.Supervisor (tool execution) stays node-local
+        (tools run where the agent runs)
+
+  - role: "Singleton & Election Engineer"
+    doc: singleton-election.md
+    focus: |
+      - Design singleton election for Router, WorkspaceLock, EventSink,
+        Tool.Registry
+      - Evaluate approaches: Horde's built-in singleton, :global, or
+        custom leader election via :pg
+      - Plan failover behavior: when the singleton node dies, how fast
+        does another take over? What state is lost?
+      - Handle split-brain for singletons: two nodes both think they're
+        leader. What's the worst case? How to detect and resolve?
+      - Design a Cortex.Cluster module as the public API for cluster
+        membership queries (nodes, leader, my_node, etc.)
+
+  - role: "State Sync Engineer"
+    doc: state-sync.md
+    focus: |
+      - Design how in-flight orchestration state survives node failure
+      - Plan run state checkpointing: what gets persisted to DB vs
+        what's reconstructable from event log?
+      - Handle partial failures: agent on node A finishes, result
+        needs to reach runner on node B
+      - Design the agent handoff protocol: capture agent state,
+        serialize, restart on new node, resume from checkpoint
+      - Leverage existing EventSink + Store for replay/reconstruction
