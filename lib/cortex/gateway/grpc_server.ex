@@ -53,13 +53,17 @@ defmodule Cortex.Gateway.GrpcServer do
     state = %{
       agent_id: nil,
       registered: false,
-      stream: stream
+      stream: stream,
+      writer_pid: nil
     }
 
-    _final_state =
+    final_state =
       Enum.reduce(request_enum, state, fn msg, acc ->
         handle_agent_message(msg, acc)
       end)
+
+    # Stop the writer process when the stream ends
+    if final_state.writer_pid, do: Process.exit(final_state.writer_pid, :shutdown)
 
     stream
   end
@@ -134,7 +138,13 @@ defmodule Cortex.Gateway.GrpcServer do
       "metadata" => Map.new(req.metadata || [])
     }
 
-    case Registry.register_grpc(agent_info, self()) do
+    # Spawn a writer process for outbound messages. The stream reader
+    # (Enum.reduce in connect/2) blocks on inbound messages, so it can't
+    # also receive {:push_gateway_message, _} from other processes.
+    # The writer loops on receive and writes to the gRPC stream.
+    writer_pid = spawn_stream_writer(state.stream)
+
+    case Registry.register_grpc(agent_info, writer_pid) do
       {:ok, agent} ->
         :telemetry.execute(
           [:cortex, :gateway, :grpc, :connect],
@@ -164,7 +174,7 @@ defmodule Cortex.Gateway.GrpcServer do
           capabilities: agent.capabilities
         })
 
-        %{state | agent_id: agent.id, registered: true}
+        %{state | agent_id: agent.id, registered: true, writer_pid: writer_pid}
 
       {:error, reason} ->
         push_error(state.stream, "REGISTRATION_FAILED", "Registration failed: #{inspect(reason)}")
@@ -213,7 +223,7 @@ defmodule Cortex.Gateway.GrpcServer do
       })
 
       Registry.route_task_result(result.task_id, %{
-        "status" => to_string(result.status),
+        "status" => proto_task_status_to_string(result.status),
         "result_text" => result.result_text,
         "duration_ms" => result.duration_ms,
         "input_tokens" => result.input_tokens,
@@ -361,6 +371,29 @@ defmodule Cortex.Gateway.GrpcServer do
          }}
     }
   end
+
+  # Spawns a linked process that receives {:push_gateway_message, msg}
+  # and writes them to the gRPC stream. This decouples outbound message
+  # delivery from the inbound Enum.reduce loop.
+  defp spawn_stream_writer(stream) do
+    spawn_link(fn -> stream_writer_loop(stream) end)
+  end
+
+  defp stream_writer_loop(stream) do
+    receive do
+      {:push_gateway_message, %GatewayMessage{} = msg} ->
+        GRPC.Server.send_reply(stream, msg)
+        stream_writer_loop(stream)
+
+      _ ->
+        stream_writer_loop(stream)
+    end
+  end
+
+  defp proto_task_status_to_string(:TASK_STATUS_COMPLETED), do: "completed"
+  defp proto_task_status_to_string(:TASK_STATUS_FAILED), do: "failed"
+  defp proto_task_status_to_string(:TASK_STATUS_CANCELLED), do: "cancelled"
+  defp proto_task_status_to_string(_), do: "failed"
 
   defp proto_status_to_atom(status) do
     case status do

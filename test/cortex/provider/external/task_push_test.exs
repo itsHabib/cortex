@@ -85,12 +85,7 @@ defmodule Cortex.Provider.External.TaskPushTest do
       assert_receive {:received, {:push_gateway_message, gateway_msg}}, 1000
       %{msg: {:task_request, proto_req}} = gateway_msg
 
-      context_map =
-        proto_req.context
-        |> Enum.map(fn entry -> {entry.key, entry.value} end)
-        |> Map.new()
-
-      assert context_map == %{"team" => "alpha", "model" => "claude"}
+      assert proto_req.context == %{"team" => "alpha", "model" => "claude"}
     end
 
     test "returns {:error, :transport_down} for dead pid" do
@@ -160,7 +155,7 @@ defmodule Cortex.Provider.External.TaskPushTest do
 
       assert_receive {:received, {:push_gateway_message, gateway_msg}}, 1000
       %{msg: {:task_request, proto_req}} = gateway_msg
-      assert proto_req.context == []
+      assert proto_req.context == %{}
     end
 
     test "handles nil tools gracefully for websocket" do

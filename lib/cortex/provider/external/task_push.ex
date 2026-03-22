@@ -74,9 +74,8 @@ defmodule Cortex.Provider.External.TaskPush do
   # -- Private --
 
   defp do_push_grpc(pid, task_request) do
-    context =
-      (task_request["context"] || %{})
-      |> Enum.map(fn {k, v} -> %TaskRequest.ContextEntry{key: k, value: v} end)
+    # context is a protobuf map field — pass a plain Elixir map, not ContextEntry structs
+    context = task_request["context"] || %{}
 
     proto_request = %TaskRequest{
       task_id: task_request["task_id"],

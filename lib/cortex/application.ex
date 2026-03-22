@@ -41,7 +41,9 @@ defmodule Cortex.Application do
             {Cortex.Agent.ExternalSupervisor, :start_link,
              [[name: Cortex.Agent.ExternalSupervisor]]},
           type: :supervisor
-        }
+        },
+        # General-purpose Task.Supervisor for async work (e.g., API-triggered runs)
+        {Task.Supervisor, name: Cortex.TaskSupervisor}
       ] ++ persistence_children() ++ web_children()
 
     opts = [strategy: :one_for_one, name: Cortex.Supervisor]

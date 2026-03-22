@@ -27,8 +27,26 @@ defmodule CortexWeb.RunController do
     json(conn, %{data: Enum.map(runs, &serialize_run/1)})
   end
 
-  @doc "Create a run."
+  @doc """
+  Create a run.
+
+  If `config_yaml` is provided, the run is created and then executed
+  asynchronously via `Runner.run/2`. The response returns immediately
+  with status `"pending"`. Poll `GET /api/runs/:id` for progress.
+  """
   @spec create(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def create(conn, %{"config_yaml" => yaml} = params) when is_binary(yaml) and yaml != "" do
+    run_attrs = Map.merge(params, %{"status" => "pending"})
+
+    with {:ok, %Run{} = run} <- Store.create_run(run_attrs) do
+      start_async_run(run, yaml)
+
+      conn
+      |> put_status(:created)
+      |> json(%{data: serialize_run(run)})
+    end
+  end
+
   def create(conn, params) do
     with {:ok, %Run{} = run} <- Store.create_run(params) do
       conn
@@ -47,6 +65,36 @@ defmodule CortexWeb.RunController do
   end
 
   # ── Private ──────────────────────────────────────────────────────────
+
+  alias Cortex.Orchestration.Runner
+
+  require Logger
+
+  defp start_async_run(%Run{} = run, yaml) do
+    Task.Supervisor.start_child(Cortex.TaskSupervisor, fn ->
+      tmp_dir = Path.join(System.tmp_dir!(), "cortex-run-#{run.id}")
+
+      try do
+        File.mkdir_p!(tmp_dir)
+        yaml_path = Path.join(tmp_dir, "orchestra.yaml")
+        File.write!(yaml_path, yaml)
+
+        Store.update_run(run, %{status: "running", workspace_path: tmp_dir, started_at: DateTime.utc_now()})
+
+        case Runner.run(yaml_path, workspace_path: tmp_dir, run_id: run.id) do
+          {:ok, _summary} ->
+            Store.update_run(run, %{status: "completed", completed_at: DateTime.utc_now()})
+            Logger.info("Run #{run.id} completed")
+
+          {:error, reason} ->
+            Store.update_run(run, %{status: "failed", completed_at: DateTime.utc_now()})
+            Logger.warning("Run #{run.id} failed: #{inspect(reason)}")
+        end
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end)
+  end
 
   defp serialize_run(%Run{} = run) do
     %{
