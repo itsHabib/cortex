@@ -1,0 +1,78 @@
+# DAG with external agents — multiple sidecar workers in a dependency chain.
+#
+# Three external agents work through a tiered DAG: two researchers in parallel
+# (tier 0), then a synthesizer that depends on both (tier 1).
+#
+# Each team name must match a registered sidecar's CORTEX_AGENT_NAME.
+#
+# Prerequisites:
+#   1. Start Cortex:   CORTEX_GATEWAY_TOKEN=my-token mix phx.server
+#   2. Start 3 sidecars (each in its own terminal):
+#
+#      CORTEX_GATEWAY_URL=localhost:4001 CORTEX_AGENT_NAME=researcher-a \
+#        CORTEX_AUTH_TOKEN=my-token CORTEX_SIDECAR_PORT=9091 \
+#        ./sidecar/bin/cortex-sidecar
+#
+#      CORTEX_GATEWAY_URL=localhost:4001 CORTEX_AGENT_NAME=researcher-b \
+#        CORTEX_AUTH_TOKEN=my-token CORTEX_SIDECAR_PORT=9092 \
+#        ./sidecar/bin/cortex-sidecar
+#
+#      CORTEX_GATEWAY_URL=localhost:4001 CORTEX_AGENT_NAME=synthesizer \
+#        CORTEX_AUTH_TOKEN=my-token CORTEX_SIDECAR_PORT=9093 \
+#        ./sidecar/bin/cortex-sidecar
+#
+#   3. Run:            mix cortex.run examples/external-dag.yaml
+
+name: "external-dag"
+
+defaults:
+  model: sonnet
+  max_turns: 20
+  permission_mode: acceptEdits
+  timeout_minutes: 10
+  provider: external
+
+teams:
+  # --- Tier 0: Two researchers in parallel ---
+  - name: researcher-a
+    lead:
+      role: "API Researcher"
+    tasks:
+      - summary: "Research REST API design patterns"
+        details: |
+          Research current best practices for REST API design.
+          Cover: resource naming, versioning, pagination, error responses,
+          authentication patterns. Produce a concise summary (~25 lines).
+        deliverables:
+          - "api-patterns.md"
+    depends_on: []
+
+  - name: researcher-b
+    lead:
+      role: "Database Researcher"
+    tasks:
+      - summary: "Research database schema patterns"
+        details: |
+          Research database schema design for a multi-tenant SaaS app.
+          Cover: tenant isolation strategies, indexing, migrations,
+          soft deletes. Produce a concise summary (~25 lines).
+        deliverables:
+          - "db-patterns.md"
+    depends_on: []
+
+  # --- Tier 1: Synthesizer depends on both researchers ---
+  - name: synthesizer
+    lead:
+      role: "Technical Architect"
+    tasks:
+      - summary: "Synthesize research into an architecture proposal"
+        details: |
+          Based on the API and database research from upstream teams,
+          produce an architecture proposal for a multi-tenant SaaS backend.
+          Include: service boundaries, data model, API design, and
+          key technical decisions. Keep it to ~40 lines.
+        deliverables:
+          - "architecture-proposal.md"
+    depends_on:
+      - researcher-a
+      - researcher-b

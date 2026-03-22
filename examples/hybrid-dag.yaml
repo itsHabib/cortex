@@ -1,0 +1,69 @@
+# Hybrid DAG — mix of local CLI agents and external sidecar agents.
+#
+# Tier 0: Two local agents (provider: cli) do research in parallel.
+# Tier 1: One external agent (provider: external) synthesizes their output.
+#
+# This shows how the same DAG can mix providers — local agents for quick
+# tasks, external sidecar agents for specialized or long-running work.
+#
+# Prerequisites:
+#   1. Start Cortex:   CORTEX_GATEWAY_TOKEN=my-token mix phx.server
+#   2. Start sidecar:  CORTEX_GATEWAY_URL=localhost:4001 \
+#                       CORTEX_AGENT_NAME=architect \
+#                       CORTEX_AUTH_TOKEN=my-token \
+#                       ./sidecar/bin/cortex-sidecar
+#   3. Run:            mix cortex.run examples/hybrid-dag.yaml
+
+name: "hybrid-dag"
+
+defaults:
+  model: sonnet
+  max_turns: 20
+  permission_mode: bypassPermissions
+  timeout_minutes: 10
+
+teams:
+  # --- Tier 0: Local CLI agents (use default provider: cli) ---
+  - name: frontend-research
+    lead:
+      role: "Frontend Researcher"
+    tasks:
+      - summary: "Research modern frontend frameworks"
+        details: |
+          Compare React, Svelte, and Solid for a dashboard application.
+          Cover: bundle size, performance, ecosystem maturity, learning curve.
+          Produce a recommendation in ~20 lines.
+        deliverables:
+          - "frontend-research.md"
+    depends_on: []
+
+  - name: backend-research
+    lead:
+      role: "Backend Researcher"
+    tasks:
+      - summary: "Research backend frameworks for Go"
+        details: |
+          Compare Chi, Gin, and Echo for a REST API service.
+          Cover: performance, middleware ecosystem, testing support, community.
+          Produce a recommendation in ~20 lines.
+        deliverables:
+          - "backend-research.md"
+    depends_on: []
+
+  # --- Tier 1: External sidecar agent synthesizes the research ---
+  - name: architect
+    provider: external
+    lead:
+      role: "Solutions Architect"
+    tasks:
+      - summary: "Design the full-stack architecture"
+        details: |
+          Based on the frontend and backend research from upstream teams,
+          design a full-stack architecture for a real-time dashboard app.
+          Include: component diagram, data flow, API contract between
+          frontend and backend, deployment strategy. Keep it to ~40 lines.
+        deliverables:
+          - "architecture.md"
+    depends_on:
+      - frontend-research
+      - backend-research

@@ -1,0 +1,34 @@
+# Simple external agent example.
+#
+# One sidecar-connected agent does all the work. The task is dispatched via
+# gRPC to a Go sidecar, which processes it and returns the result.
+#
+# Prerequisites:
+#   1. Start Cortex:   CORTEX_GATEWAY_TOKEN=my-token mix phx.server
+#   2. Start sidecar:  CORTEX_GATEWAY_URL=localhost:4001 \
+#                       CORTEX_AGENT_NAME=worker \
+#                       CORTEX_AUTH_TOKEN=my-token \
+#                       ./sidecar/bin/cortex-sidecar
+#   3. Run:            mix cortex.run examples/external-simple.yaml
+
+name: "external-simple"
+
+defaults:
+  model: sonnet
+  max_turns: 10
+  permission_mode: acceptEdits
+  timeout_minutes: 5
+  provider: external
+
+teams:
+  - name: worker
+    lead:
+      role: "General Worker"
+    tasks:
+      - summary: "Analyze the project structure"
+        details: |
+          List the top-level directories and describe what each one contains.
+          Produce a brief project overview in ~20 lines.
+        deliverables:
+          - "project-overview.md"
+    depends_on: []
