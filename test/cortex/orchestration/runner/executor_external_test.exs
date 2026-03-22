@@ -89,23 +89,12 @@ defmodule Cortex.Orchestration.Runner.ExecutorExternalTest do
     Process.sleep(50)
   end
 
+  @external_fixture_path "test/fixtures/orchestration/external-agent.yaml"
+
   defp external_yaml(team_name) do
-    """
-    name: "external-test"
-    defaults:
-      model: sonnet
-      max_turns: 10
-      permission_mode: acceptEdits
-      timeout_minutes: 5
-      provider: external
-    teams:
-      - name: #{team_name}
-        lead:
-          role: "Worker"
-        tasks:
-          - summary: "Do external work"
-        depends_on: []
-    """
+    @external_fixture_path
+    |> File.read!()
+    |> String.replace("${TEAM_NAME}", team_name)
   end
 
   defp cli_yaml do

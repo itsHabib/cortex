@@ -1,0 +1,14 @@
+name: "external-test"
+defaults:
+  model: sonnet
+  max_turns: 10
+  permission_mode: acceptEdits
+  timeout_minutes: 5
+  provider: external
+teams:
+  - name: "${TEAM_NAME}"
+    lead:
+      role: "Worker"
+    tasks:
+      - summary: "Do external work"
+    depends_on: []
