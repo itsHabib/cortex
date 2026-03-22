@@ -508,7 +508,14 @@ defmodule Cortex.Orchestration.Runner.Executor do
   defp run_via_external_agent(team_name, prompt, run_opts) do
     case ensure_external_agent(team_name) do
       {:ok, agent_pid} ->
-        ExternalAgent.run(agent_pid, prompt, run_opts)
+        try do
+          ExternalAgent.run(agent_pid, prompt, run_opts)
+        catch
+          :exit, reason ->
+            Logger.warning("ExternalAgent.run exited for #{team_name}: #{inspect(reason)}")
+
+            {:error, {:agent_exit, reason}}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -521,7 +528,12 @@ defmodule Cortex.Orchestration.Runner.Executor do
         {:ok, pid}
 
       :not_found ->
-        ExternalSupervisor.start_agent(name: team_name)
+        try do
+          ExternalSupervisor.start_agent(name: team_name)
+        catch
+          :exit, reason ->
+            {:error, {:supervisor_not_available, reason}}
+        end
     end
   end
 

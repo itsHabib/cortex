@@ -1,0 +1,135 @@
+phase: "External Agent QE"
+
+goal: >
+  Harden ExternalAgent GenServer and executor integration through adversarial
+  testing — find bugs, race conditions, and edge cases, then fix them.
+
+system_context: |
+  ## What Just Shipped (Phase 3.5)
+
+  ExternalAgent GenServer + executor integration. The code is committed and
+  passing 1367 tests + 5 executor-external tests (3 unit, 2 integration).
+
+  ### ExternalAgent GenServer — lib/cortex/agent/external_agent.ex
+
+  - `start_link(opts)` — confirms sidecar in Gateway.Registry, subscribes PubSub
+  - `run(server, prompt, opts)` — GenServer.call with :infinity timeout,
+    delegates to Provider.External.start/run/stop internally
+  - `get_state(server)` — returns name, agent_id, status, agent_info
+  - `stop(server)` — GenServer.stop(:normal)
+  - PubSub handle_info:
+    - :agent_unregistered (matching agent_id) → marks unhealthy
+    - :agent_registered (matching name) → re-queries registry, restores healthy
+    - :agent_status_changed (matching agent_id) → updates cached status
+  - Catch-all handle_info for unmatched events
+  - dispatch_via_provider/3 builds fresh Provider.External handle per call
+  - find_agent_in_registry/2 catches :exit from dead registry
+
+  ### ExternalSupervisor — lib/cortex/agent/external_supervisor.ex
+
+  - DynamicSupervisor with :one_for_one strategy
+  - start_agent(opts) — starts ExternalAgent child, handles :already_started
+  - find_agent(name) — delegates to Cortex.Agent.Registry.lookup
+  - stop_agent(name) — lookup + terminate_child
+  - list_agents() — cross-references Registry with supervisor children
+
+  ### Executor Integration — lib/cortex/orchestration/runner/executor.ex
+
+  - dispatch_to_provider/6 pattern matches on Provider.External module
+  - run_via_external_agent/3 → ensure_external_agent/1 → ExternalAgent.run
+  - ensure_external_agent/1 does find-or-start via ExternalSupervisor
+  - Non-external providers use existing generic start/run/stop path
+
+  ### Existing Test Files
+  - test/cortex/agent/external_agent_test.exs — 13 tests
+  - test/cortex/agent/external_supervisor_test.exs — 8 tests
+  - test/cortex/orchestration/runner/executor_external_test.exs — 5 tests
+
+  ### Key Risk Areas to Probe
+  1. Sidecar disconnects mid-task (PubSub arrives during Provider.External.run)
+  2. GenServer.call timeout vs Provider.External timeout race
+  3. Concurrent ensure_external_agent calls for same team_name
+  4. PubSub event with matching name but different agent_id (reconnect scenario)
+  5. Registry down during run/3 (not just during init)
+  6. ExternalAgent process crash during run — does executor handle it?
+  7. stop_agent while run is in progress
+  8. list_agents when supervisor has children that aren't ExternalAgents
+  9. Provider.External.start returns error inside dispatch_via_provider
+  10. Large number of concurrent ExternalAgents under one supervisor
+
+  ## Coding Conventions
+  - @moduledoc, @doc, @spec on all public functions
+  - defstruct with @enforce_keys for required fields
+  - Pattern match in function heads
+  - Return {:ok, value} | {:error, reason} from fallible functions
+  - Tests mirror lib/ structure, use async: true where safe
+  - Do NOT pipe `mix test` to `tail`, `grep`, or any other command — it hangs forever
+
+dependencies:
+  - docs/compute-spawning/PROJECT.md
+  - docs/compute-spawning/phase-3.5-external-agent/plans/external-agent.md
+  - docs/compute-spawning/phase-3.5-external-agent/plans/executor-integration.md
+  - lib/cortex/agent/external_agent.ex
+  - lib/cortex/agent/external_supervisor.ex
+  - lib/cortex/orchestration/runner/executor.ex
+  - test/cortex/agent/external_agent_test.exs
+  - test/cortex/agent/external_supervisor_test.exs
+  - test/cortex/orchestration/runner/executor_external_test.exs
+
+plans_dir: docs/compute-spawning/phase-3.5-external-agent-qe/plans
+content_dir: docs/compute-spawning/phase-3.5-external-agent-qe/content
+
+teammates:
+  - role: "GenServer Edge Case Engineer"
+    doc: genserver-edge-cases.md
+    focus: |
+      Adversarial testing of the ExternalAgent GenServer itself.
+
+      Probe these scenarios and write tests + fixes:
+      1. Sidecar disconnects mid-task — PubSub :agent_unregistered arrives while
+         Provider.External.run is blocking inside handle_call. Does the state
+         update happen after run returns? Or is it queued? Verify correctness.
+      2. run/3 called on a GenServer that crashes mid-dispatch — does the caller
+         get a clean {:error, _} or an unhandled exit?
+      3. Rapid disconnect/reconnect — agent_unregistered then agent_registered
+         in quick succession. Does the GenServer end up healthy with correct
+         agent_id?
+      4. PubSub event with matching name but stale agent_id — the reconnect
+         handler re-queries registry. What if the registry returns :not_found
+         (agent already gone again)?
+      5. start_link when sidecar exists but Gateway.Registry is overloaded
+         (slow response) — does it handle timeouts?
+      6. Multiple run/3 calls queued in the GenServer mailbox — second caller
+         waits for first to finish. Verify ordering and that both get correct results.
+      7. stop/1 called while run/3 is in progress — does the blocked caller get
+         a clean error?
+
+      Files to modify:
+      - test/cortex/agent/external_agent_test.exs — add edge case tests
+      - lib/cortex/agent/external_agent.ex — fix any bugs found
+
+  - role: "Executor Integration QE"
+    doc: executor-integration-qe.md
+    focus: |
+      Adversarial testing of the executor → ExternalAgent integration path.
+
+      Probe these scenarios and write tests + fixes:
+      1. ensure_external_agent race — two DAG tiers call ensure_external_agent
+         for the same team_name concurrently. find_agent returns :not_found for
+         both, both call start_agent. Does :already_started handling work?
+      2. ExternalAgent process crashes between ensure_external_agent and run —
+         pid is stale. Does the executor get a clean error?
+      3. ExternalSupervisor not started (removed from app tree) — does
+         ensure_external_agent return a clean error, not crash?
+      4. Provider.External.start fails inside ExternalAgent.run (e.g., PendingTasks
+         not running) — does the error propagate cleanly to the executor?
+      5. Executor timeout (Task.await_many) fires before ExternalAgent.run returns —
+         verify the ExternalAgent GenServer isn't left in a bad state.
+      6. Same team_name used across multiple DAG runs — verify agent reuse
+         doesn't leak state from previous runs.
+      7. Verify telemetry events are emitted at the right points (if any exist).
+
+      Files to modify:
+      - test/cortex/orchestration/runner/executor_external_test.exs — add edge case tests
+      - lib/cortex/orchestration/runner/executor.ex — fix any bugs found
+      - lib/cortex/agent/external_supervisor.ex — fix any bugs found

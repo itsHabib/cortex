@@ -257,12 +257,21 @@ defmodule Cortex.Agent.ExternalAgent do
       ]
       |> maybe_add_push_fn(state.push_fn)
 
-    with {:ok, handle} <- ProviderExternal.start(provider_config) do
-      try do
-        ProviderExternal.run(handle, prompt, team_name: team_name, timeout_ms: timeout_ms)
-      after
-        ProviderExternal.stop(handle)
+    try do
+      with {:ok, handle} <- ProviderExternal.start(provider_config) do
+        try do
+          ProviderExternal.run(handle, prompt, team_name: team_name, timeout_ms: timeout_ms)
+        after
+          ProviderExternal.stop(handle)
+        end
       end
+    rescue
+      e ->
+        Logger.warning(
+          "ExternalAgent #{state.name}: dispatch failed with exception: #{Exception.message(e)}"
+        )
+
+        {:error, {:dispatch_failed, Exception.message(e)}}
     end
   end
 
