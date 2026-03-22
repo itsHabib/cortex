@@ -236,6 +236,11 @@ defmodule Cortex.Orchestration.Config.Validator do
     ["#{context}: invalid backend '#{inspect(backend)}', must be one of: #{valid}" | errors]
   end
 
+  # Provider.External is experimental — blocked until agent worker ships.
+  defp validate_external_blocked(errors, :external, context) do
+    ["#{context}: provider 'external' is not yet available — use provider 'cli' instead" | errors]
+  end
+
   defp validate_external_blocked(errors, _provider, _context), do: errors
 
   # TODO(Future): remove this gate when Provider.HTTP ships

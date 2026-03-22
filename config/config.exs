@@ -21,9 +21,11 @@ config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
+# gRPC server disabled — Provider.External is gated until agent worker ships.
+# Re-enable with: start_server: true
 config :cortex, Cortex.Gateway.GrpcEndpoint,
   port: 4001,
-  start_server: true
+  start_server: false
 
 config :phoenix, :json_library, Jason
 

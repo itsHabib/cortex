@@ -34,7 +34,13 @@ tracks:
   compute-spawning:
     description: "Provider & SpawnBackend abstractions for remote compute"
     project_doc: docs/compute-spawning/PROJECT.md
-    status: in_progress
+    status: paused
+    decision: |
+      External agent infrastructure (gRPC, sidecar, Provider.External) is gated.
+      Cortex focuses on being the best local CLI orchestrator (provider: cli).
+      External/distributed execution deferred to a potential Go CLI rewrite.
+      Code stays in the repo but is not active — gRPC server disabled,
+      Provider.External blocked at validation, ExternalSupervisor removed from app tree.
     phases:
       phase-1-foundation:
         config: docs/compute-spawning/phase-1-foundation/kickoff.yaml
@@ -63,9 +69,9 @@ tracks:
         notes: "ExternalAgent GenServer + executor integration + QE bug smash (3 crash fixes, 15 adversarial tests)"
       phase-4-remote-backends:
         config: docs/compute-spawning/phase-4-remote-backends/kickoff.yaml
-        status: pending
+        status: deferred
         depends_on: [phase-3.5-external-agent]
-        notes: "SpawnBackend.Docker and SpawnBackend.K8s with agent+sidecar co-deployment"
+        notes: "Deferred — remote backends belong in Go CLI rewrite, not Elixir Cortex"
 
   cluster-mode:
     description: "Agent mesh with external registration, gRPC data plane, sidecar"
