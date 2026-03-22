@@ -1,0 +1,29 @@
+name: "agent-worker-phase-3"
+description: "Agent Worker V2 — Claude API with tools"
+
+dependencies:
+  - docs/agent-worker/phase-2/kickoff.yaml
+  - docs/compute-spawning/agent-worker-design.md
+
+goals:
+  - Replace claude -p with direct Claude Messages API calls (Anthropic Go SDK)
+  - Implement agentic loop (tool calls -> execute -> feed back -> repeat)
+  - Add peer communication tools (send_message, ask_agent, check_inbox, broadcast)
+  - Worker translates tool calls to sidecar HTTP API calls
+  - Token and cost tracking in the result
+
+tasks:
+  - name: claude-api-client
+    summary: "Direct Claude Messages API calls via Anthropic Go SDK"
+  - name: agentic-loop
+    summary: "Tool call -> execute -> feed back -> repeat loop"
+  - name: peer-tools
+    summary: "Peer communication tools: send_message, ask_agent, check_inbox, broadcast"
+  - name: tool-translation
+    summary: "Worker translates tool calls to sidecar HTTP API calls"
+  - name: cost-tracking
+    summary: "Token and cost tracking in the result"
+
+verify:
+  - "make worker-build"
+  - "make e2e"

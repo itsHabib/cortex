@@ -1,8 +1,6 @@
 defmodule Cortex.Agent.ExternalSupervisorTest do
   use ExUnit.Case, async: false
 
-  @moduletag :external
-
   alias Cortex.Agent.ExternalSupervisor
   alias Cortex.Gateway.Registry, as: GatewayRegistry
 

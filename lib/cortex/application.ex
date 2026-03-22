@@ -34,6 +34,14 @@ defmodule Cortex.Application do
         Cortex.Orchestration.WorkspaceLock,
         # Gateway: supervisor for external agent registry and health monitor
         Cortex.Gateway.Supervisor,
+        # ExternalAgent: DynamicSupervisor for sidecar-connected agent GenServers
+        %{
+          id: Cortex.Agent.ExternalSupervisor,
+          start:
+            {Cortex.Agent.ExternalSupervisor, :start_link,
+             [[name: Cortex.Agent.ExternalSupervisor]]},
+          type: :supervisor
+        },
         # General-purpose Task.Supervisor for async work (e.g., API-triggered runs)
         {Task.Supervisor, name: Cortex.TaskSupervisor}
       ] ++ persistence_children() ++ web_children()

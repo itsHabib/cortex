@@ -22,7 +22,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +45,10 @@ func sidecarBin() string {
 	return filepath.Join(projectRoot(), "sidecar", "bin", "cortex-sidecar")
 }
 
+func workerBin() string {
+	return filepath.Join(projectRoot(), "sidecar", "bin", "agent-worker")
+}
+
 // TestExternalAgentE2E tests the full pipeline:
 //  1. Start Cortex server (mix phx.server)
 //  2. Start Go sidecar → registers in Gateway via gRPC
@@ -54,9 +57,12 @@ func sidecarBin() string {
 //  5. Poll GET /api/runs/:id until completed
 //  6. Assert run completed successfully
 func TestExternalAgentE2E(t *testing.T) {
-	// Check sidecar binary exists
+	// Check binaries exist
 	if _, err := os.Stat(sidecarBin()); err != nil {
 		t.Fatalf("Sidecar binary not found at %s. Run: cd sidecar && make build", sidecarBin())
+	}
+	if _, err := os.Stat(workerBin()); err != nil {
+		t.Fatalf("Agent-worker binary not found at %s. Run: make worker-build", workerBin())
 	}
 
 	// --- Start Cortex ---
@@ -83,11 +89,22 @@ func TestExternalAgentE2E(t *testing.T) {
 	}
 	t.Log("Sidecar is healthy and connected")
 
-	// --- Start task auto-responder ---
-	taskDone := make(chan string, 1)
-	stopPoller := make(chan struct{})
-	go taskPoller(t, taskDone, stopPoller)
-	defer close(stopPoller)
+	// --- Start agent-worker ---
+	claudeCommand := ""
+	if os.Getenv("USE_CLAUDE") == "" {
+		mockScript := createMockClaudeScript(t)
+		defer os.Remove(mockScript)
+		claudeCommand = mockScript
+		t.Log("Using mock claude (set USE_CLAUDE=1 for real Claude)")
+	} else {
+		t.Log("Using real Claude (USE_CLAUDE=1)")
+	}
+
+	worker, err := startWorker(t, claudeCommand)
+	if err != nil {
+		t.Fatalf("Failed to start agent-worker: %v", err)
+	}
+	defer stopProcess(worker, "Agent-worker", t)
 
 	// --- Create and trigger a run ---
 	runID, err := createRun(t)
@@ -97,7 +114,11 @@ func TestExternalAgentE2E(t *testing.T) {
 	t.Logf("Created run: %s", runID)
 
 	// --- Wait for run to complete ---
-	finalStatus, err := waitForRunCompletion(runID, 60*time.Second)
+	runTimeout := 60 * time.Second
+	if os.Getenv("USE_CLAUDE") != "" {
+		runTimeout = 180 * time.Second
+	}
+	finalStatus, err := waitForRunCompletion(runID, runTimeout)
 	if err != nil {
 		t.Fatalf("Run did not complete: %v", err)
 	}
@@ -106,14 +127,6 @@ func TestExternalAgentE2E(t *testing.T) {
 
 	if finalStatus != "completed" {
 		t.Errorf("Expected run status 'completed', got '%s'", finalStatus)
-	}
-
-	// --- Verify the poller handled a task ---
-	select {
-	case taskID := <-taskDone:
-		t.Logf("Task auto-responded: %s", taskID)
-	case <-time.After(5 * time.Second):
-		t.Error("Task poller did not report completing a task")
 	}
 }
 
@@ -126,8 +139,10 @@ func startCortex(t *testing.T) (*exec.Cmd, error) {
 		"CORTEX_GATEWAY_TOKEN="+authToken,
 		"MIX_ENV=dev",
 	)
-	cmd.Stdout = nil // suppress output
-	cmd.Stderr = nil
+	if testing.Verbose() {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start cortex: %w", err)
@@ -147,8 +162,10 @@ func startSidecar(t *testing.T) (*exec.Cmd, error) {
 		"CORTEX_AUTH_TOKEN="+authToken,
 		"CORTEX_SIDECAR_PORT="+sidecarPort,
 	)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	if testing.Verbose() {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start sidecar: %w", err)
@@ -278,79 +295,44 @@ func waitForRunCompletion(runID string, timeout time.Duration) (string, error) {
 	return "", fmt.Errorf("run %s did not finish within %s", runID, timeout)
 }
 
-// --- Task auto-responder ---
+// --- Agent worker ---
 
-func taskPoller(t *testing.T, done chan<- string, stop <-chan struct{}) {
-	for {
-		select {
-		case <-stop:
-			return
-		default:
-		}
-
-		taskID, err := pollTask()
-		if err != nil || taskID == "" {
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		t.Logf("Poller: got task %s, submitting result", taskID)
-		if err := submitResult(taskID); err != nil {
-			t.Logf("Poller: submit failed: %v", err)
-			continue
-		}
-
-		select {
-		case done <- taskID:
-		default:
-		}
-	}
-}
-
-func pollTask() (string, error) {
-	resp, err := http.Get(sidecarHTTP + "/task")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Task *struct {
-			TaskID string `json:"task_id"`
-		} `json:"task"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
-	}
-	if result.Task == nil {
-		return "", nil
-	}
-	return result.Task.TaskID, nil
-}
-
-func submitResult(taskID string) error {
-	body, _ := json.Marshal(map[string]any{
-		"task_id":      taskID,
-		"status":       "completed",
-		"result_text":  "E2E test: task completed successfully",
-		"duration_ms":  100,
-		"input_tokens":  10,
-		"output_tokens": 20,
-	})
-
-	resp, err := http.Post(
-		sidecarHTTP+"/task/result",
-		"application/json",
-		bytes.NewReader(body),
+// startWorker starts the agent-worker binary. If claudeCommand is empty,
+// it uses the default "claude" CLI.
+func startWorker(t *testing.T, claudeCommand string) (*exec.Cmd, error) {
+	cmd := exec.Command(workerBin())
+	env := append(os.Environ(),
+		"SIDECAR_URL="+sidecarHTTP,
+		"POLL_INTERVAL_MS=200",
 	)
-	if err != nil {
-		return err
+	if claudeCommand != "" {
+		env = append(env, "CLAUDE_COMMAND="+claudeCommand)
 	}
-	defer resp.Body.Close()
+	cmd.Env = env
+	if testing.Verbose() {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("submit result: %d %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start agent-worker: %w", err)
 	}
-	return nil
+
+	t.Logf("Agent-worker started (PID %d)", cmd.Process.Pid)
+	return cmd, nil
+}
+
+func createMockClaudeScript(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock-claude.sh")
+	content := `#!/bin/bash
+# Mock claude script for e2e testing.
+# Ignores all args, outputs a fixed response.
+echo "E2E test: task completed successfully by agent-worker"
+`
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatalf("Failed to create mock claude script: %v", err)
+	}
+	return script
 }

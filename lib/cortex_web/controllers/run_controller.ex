@@ -79,7 +79,11 @@ defmodule CortexWeb.RunController do
         yaml_path = Path.join(tmp_dir, "orchestra.yaml")
         File.write!(yaml_path, yaml)
 
-        Store.update_run(run, %{status: "running", workspace_path: tmp_dir, started_at: DateTime.utc_now()})
+        Store.update_run(run, %{
+          status: "running",
+          workspace_path: tmp_dir,
+          started_at: DateTime.utc_now()
+        })
 
         case Runner.run(yaml_path, workspace_path: tmp_dir, run_id: run.id) do
           {:ok, _summary} ->

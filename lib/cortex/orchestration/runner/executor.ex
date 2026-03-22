@@ -13,6 +13,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
   produce empty tiers.
   """
 
+  alias Cortex.Agent.ExternalAgent
+  alias Cortex.Agent.ExternalSupervisor
   alias Cortex.Messaging.InboxBridge
   alias Cortex.Messaging.OutboxWatcher
   alias Cortex.Orchestration.Config
@@ -24,6 +26,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   alias Cortex.Orchestration.Summary
   alias Cortex.Orchestration.TeamResult
   alias Cortex.Orchestration.Workspace
+  alias Cortex.Provider.External, as: ProviderExternal
   alias Cortex.Provider.Resolver, as: ProviderResolver
   alias Cortex.Store.Schemas.TeamRun, as: TeamRunSchema
   alias Cortex.Telemetry, as: Tel
@@ -481,6 +484,10 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
   # -- Provider dispatch -------------------------------------------------------
 
+  defp dispatch_to_provider(ProviderExternal, team_name, prompt, run_opts, _command, _workspace) do
+    run_via_external_agent(team_name, prompt, run_opts)
+  end
+
   defp dispatch_to_provider(provider_mod, _team_name, prompt, run_opts, command, workspace) do
     provider_config = %{
       command: command,
@@ -494,6 +501,38 @@ defmodule Cortex.Orchestration.Runner.Executor do
         provider_mod.stop(handle)
       end
     end
+  end
+
+  # -- External agent helpers --------------------------------------------------
+
+  defp run_via_external_agent(team_name, prompt, run_opts) do
+    case ensure_external_agent(team_name) do
+      {:ok, agent_pid} ->
+        try do
+          ExternalAgent.run(agent_pid, prompt, run_opts)
+        catch
+          :exit, reason ->
+            Logger.warning("ExternalAgent.run exited for #{team_name}: #{inspect(reason)}")
+            {:error, {:agent_exit, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp ensure_external_agent(team_name) do
+    case ExternalSupervisor.find_agent(team_name) do
+      {:ok, pid} ->
+        if Process.alive?(pid), do: {:ok, pid}, else: start_fresh_agent(team_name)
+
+      :not_found ->
+        start_fresh_agent(team_name)
+    end
+  end
+
+  defp start_fresh_agent(team_name) do
+    ExternalSupervisor.start_agent(name: team_name)
   end
 
   # -- Run ID resolution ------------------------------------------------------

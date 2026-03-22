@@ -1,9 +1,6 @@
 defmodule Cortex.Orchestration.Runner.ExecutorExternalTest do
   use ExUnit.Case, async: false
 
-  # Provider.External is gated — these tests are excluded until the agent worker ships.
-  @moduletag :external
-
   alias Cortex.Agent.ExternalAgent
   alias Cortex.Agent.ExternalSupervisor
   alias Cortex.Gateway.Registry, as: GatewayRegistry

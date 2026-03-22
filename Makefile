@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-shell e2e-elixir sidecar-build sidecar-test sidecar-lint sidecar-check
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check
 
 # -- Development --
 
@@ -125,8 +125,8 @@ test-integration: ## Run only @tag :integration tests (requires real claude CLI)
 test-all: ## Run ALL tests including integration (requires real claude CLI)
 	mix test --include integration
 
-e2e: sidecar-build ## Run full e2e: starts Cortex + sidecar, runs test, cleans up
-	cd e2e && go test -v -timeout 120s
+e2e: sidecar-build worker-build ## Run full e2e: starts Cortex + sidecar, runs test, cleans up
+	cd e2e && go test -v -timeout 300s
 
 e2e-shell: ## Run shell-based e2e sidecar ↔ gRPC ↔ gateway test
 	./test/e2e/sidecar_e2e_test.sh
@@ -138,6 +138,9 @@ e2e-elixir: ## Run Elixir e2e test (WIP, requires ports 4011/9091 free)
 
 sidecar-build: ## Build the Go sidecar binary
 	cd sidecar && make build
+
+worker-build: ## Build the Go agent-worker binary
+	cd sidecar && make worker-build
 
 sidecar-test: ## Run sidecar Go tests
 	cd sidecar && make test

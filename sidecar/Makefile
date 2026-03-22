@@ -1,9 +1,13 @@
-.PHONY: build test lint docker-build clean
+.PHONY: build worker-build test lint docker-build clean
 
 BINARY := bin/cortex-sidecar
+WORKER_BINARY := bin/agent-worker
 
 build:
 	CGO_ENABLED=0 go build -o $(BINARY) ./cmd/cortex-sidecar
+
+worker-build:
+	CGO_ENABLED=0 go build -o $(WORKER_BINARY) ./cmd/agent-worker
 
 test:
 	go test ./... -race -v

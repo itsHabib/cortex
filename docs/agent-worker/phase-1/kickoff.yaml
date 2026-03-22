@@ -1,0 +1,89 @@
+name: "agent-worker-phase-1"
+description: "Ungate external agent infrastructure + Agent Worker V1 (claude -p)"
+
+dependencies:
+  - docs/compute-spawning/agent-worker-design.md
+  - docs/compute-spawning/agent-worker-kickoff-prompt.md
+  - docs/compute-spawning/PROJECT.md
+
+goals:
+  - Ungate the external agent path (gated in commit 8ee64e9)
+  - Build and test the agent-worker Go binary (V1 — claude -p)
+  - Add make targets for worker-build
+  - Update e2e test to use real agent-worker
+  - All tests pass (mix test + make e2e)
+
+tasks:
+  - name: ungate-grpc
+    summary: "Re-enable gRPC server in config/config.exs"
+    details: |
+      Set start_server: true for Cortex.Gateway.GrpcEndpoint.
+      Remove the gating comment.
+    files:
+      - config/config.exs
+
+  - name: ungate-validator
+    summary: "Remove external provider block in validator"
+    details: |
+      Make validate_external_blocked a no-op (return errors unchanged).
+      Remove the blocking clause for :external.
+    files:
+      - lib/cortex/orchestration/config/validator.ex
+
+  - name: ungate-application
+    summary: "Add ExternalSupervisor back to supervision tree"
+    details: |
+      Re-add the ExternalSupervisor child spec to Cortex.Application,
+      placed before the Task.Supervisor (just like the pre-gating commit).
+    files:
+      - lib/cortex/application.ex
+
+  - name: ungate-executor
+    summary: "Restore Provider.External dispatch path in executor"
+    details: |
+      Re-add aliases: ExternalAgent, ExternalSupervisor, Provider.External.
+      Re-add dispatch_to_provider clause for ProviderExternal.
+      Re-add run_via_external_agent and ensure_external_agent helpers.
+    files:
+      - lib/cortex/orchestration/runner/executor.ex
+
+  - name: ungate-tests
+    summary: "Remove :external from test exclusion + update test assertions"
+    details: |
+      test/test_helper.exs — remove :external from exclude list.
+      validator_test.exs — update "provider :external is blocked" tests
+        to assert {:ok, ...} instead of {:error, ...}.
+      loader_test.exs — update "external provider is blocked" test
+        to assert {:ok, ...} (parses successfully now).
+    files:
+      - test/test_helper.exs
+      - test/cortex/orchestration/config/validator_test.exs
+      - test/cortex/orchestration/config/loader_test.exs
+
+  - name: verify-elixir
+    summary: "Run mix test — all tests must pass"
+    verify: "mix test"
+
+  - name: worker-build
+    summary: "Add make worker-build target and verify Go build"
+    details: |
+      Add worker-build target to Makefile that builds sidecar/cmd/agent-worker
+      into bin/agent-worker. Verify the binary builds successfully.
+    files:
+      - Makefile
+      - sidecar/Makefile
+
+  - name: e2e-update
+    summary: "Update e2e test and make e2e to use real agent-worker"
+    details: |
+      Update e2e/external_agent_test.go to use the real agent-worker binary
+      instead of the fake poller. Update make e2e to build agent-worker first.
+    files:
+      - e2e/external_agent_test.go
+      - Makefile
+
+verify:
+  - "mix test"
+  - "mix compile --warnings-as-errors"
+  - "mix format --check-formatted"
+  - "make worker-build"

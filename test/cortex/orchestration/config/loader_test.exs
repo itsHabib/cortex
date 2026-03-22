@@ -377,7 +377,7 @@ defmodule Cortex.Orchestration.Config.LoaderTest do
       assert config.defaults.provider == :cli
     end
 
-    test "external provider is blocked at validation" do
+    test "external provider parses successfully" do
       yaml = """
       name: "external"
       defaults:
@@ -393,8 +393,9 @@ defmodule Cortex.Orchestration.Config.LoaderTest do
               verify: "v"
       """
 
-      assert {:error, errors} = Loader.load_string(yaml)
-      assert Enum.any?(errors, &String.contains?(&1, "not yet available"))
+      assert {:ok, config, _warnings} = Loader.load_string(yaml)
+      assert config.defaults.provider == :external
+      assert config.defaults.backend == :docker
     end
   end
 

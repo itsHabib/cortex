@@ -259,7 +259,12 @@ defmodule Cortex.E2E.ExternalAgentTest do
 
     headers = [{~c"content-type", ~c"application/json"}]
 
-    case :httpc.request(:post, {url, headers, ~c"application/json", body}, [{:timeout, 5_000}], []) do
+    case :httpc.request(
+           :post,
+           {url, headers, ~c"application/json", body},
+           [{:timeout, 5_000}],
+           []
+         ) do
       {:ok, {{_, 200, _}, _, _}} -> :ok
       other -> Logger.warning("E2E: submit_task_result failed: #{inspect(other)}")
     end

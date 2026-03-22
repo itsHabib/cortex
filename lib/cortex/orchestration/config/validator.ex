@@ -17,7 +17,6 @@ defmodule Cortex.Orchestration.Config.Validator do
     - No dependency cycles
     - Invalid `provider` value (must be `:cli`, `:http`, or `:external`)
     - Invalid `backend` value (must be `:local`, `:docker`, or `:k8s`)
-    - `provider: :external` is blocked in Phase 1 (not yet implemented)
     - `provider: :http` is blocked until Provider.HTTP ships (not yet implemented)
 
   ## Soft Warnings
@@ -234,11 +233,6 @@ defmodule Cortex.Orchestration.Config.Validator do
   defp validate_single_backend(errors, backend, context) do
     valid = Enum.map_join(@valid_backends, ", ", &Atom.to_string/1)
     ["#{context}: invalid backend '#{inspect(backend)}', must be one of: #{valid}" | errors]
-  end
-
-  # Provider.External is experimental — blocked until agent worker ships.
-  defp validate_external_blocked(errors, :external, context) do
-    ["#{context}: provider 'external' is not yet available — use provider 'cli' instead" | errors]
   end
 
   defp validate_external_blocked(errors, _provider, _context), do: errors

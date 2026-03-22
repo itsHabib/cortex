@@ -238,7 +238,7 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
     end
 
     test "valid provider values pass" do
-      for provider <- [:cli] do
+      for provider <- [:cli, :external] do
         config = %{valid_config() | defaults: %Defaults{provider: provider}}
         assert {:ok, %Config{}, _warnings} = Validator.validate(config)
       end
@@ -271,10 +271,9 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "invalid backend"))
     end
 
-    test "provider :external is blocked" do
+    test "provider :external is accepted" do
       config = %{valid_config() | defaults: %Defaults{provider: :external}}
-      assert {:error, errors} = Validator.validate(config)
-      assert Enum.any?(errors, &String.contains?(&1, "not yet available"))
+      assert {:ok, %Config{}, _warnings} = Validator.validate(config)
     end
 
     test "team-level invalid provider is an error" do
@@ -297,14 +296,13 @@ defmodule Cortex.Orchestration.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "invalid backend"))
     end
 
-    test "team-level provider :external is blocked" do
+    test "team-level provider :external is accepted" do
       config =
         update_first_team(valid_config(), fn team ->
           %{team | provider: :external}
         end)
 
-      assert {:error, errors} = Validator.validate(config)
-      assert Enum.any?(errors, &String.contains?(&1, "not yet available"))
+      assert {:ok, %Config{}, _warnings} = Validator.validate(config)
     end
 
     test "provider :http is blocked until Provider.HTTP ships" do
