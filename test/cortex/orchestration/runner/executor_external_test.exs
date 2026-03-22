@@ -569,6 +569,50 @@ defmodule Cortex.Orchestration.Runner.ExecutorExternalTest do
     end
   end
 
+  # -- Local spawn path tests --
+
+  describe "executor with provider: external + backend: local" do
+    test "skips spawning when sidecar is already registered (backward compat)" do
+      team_name = "ext-skip-spawn-#{:erlang.unique_integer([:positive])}"
+      tmp_dir = create_tmp_dir()
+
+      {_agent, transport_pid} = register_mock_sidecar(team_name)
+      _mock = start_mock_sidecar()
+
+      try do
+        yaml_path = write_yaml(tmp_dir, "orchestra.yaml", external_yaml(team_name))
+
+        # Even though backend is :local (default), the sidecar is already registered
+        # so ExternalSpawner.spawn should be skipped
+        assert {:ok, summary} = Runner.run(yaml_path, workspace_path: tmp_dir)
+        assert summary.status == :complete
+        assert summary.teams[team_name].status == "done"
+      after
+        cleanup_sidecar(team_name, transport_pid)
+        cleanup(tmp_dir)
+      end
+    end
+
+    test "returns error when sidecar binary is not found and not pre-registered" do
+      team_name = "ext-no-bin-#{:erlang.unique_integer([:positive])}"
+      tmp_dir = create_tmp_dir()
+
+      try do
+        yaml_path = write_yaml(tmp_dir, "orchestra.yaml", external_yaml(team_name))
+
+        # No sidecar is registered, and the sidecar binary doesn't exist,
+        # so ExternalSpawner.spawn will fail with :binary_not_found.
+        # The executor should still complete (spawn failure is non-fatal,
+        # falls through to ExternalAgent which also fails with :agent_not_found).
+        result = Runner.run(yaml_path, workspace_path: tmp_dir, continue_on_error: false)
+
+        assert {:error, {:tier_failed, 0, [^team_name]}} = result
+      after
+        cleanup(tmp_dir)
+      end
+    end
+  end
+
   # -- Integration test --
 
   describe "end-to-end external agent flow" do

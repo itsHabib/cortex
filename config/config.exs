@@ -25,6 +25,10 @@ config :cortex, Cortex.Gateway.GrpcEndpoint,
   port: 4001,
   start_server: true
 
+config :cortex, Cortex.SpawnBackend.Local,
+  sidecar_bin: "sidecar/bin/cortex-sidecar",
+  worker_bin: "sidecar/bin/agent-worker"
+
 config :phoenix, :json_library, Jason
 
 config :tailwind, :version, "4.1.12"
