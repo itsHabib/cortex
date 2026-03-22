@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e sidecar-build sidecar-test sidecar-lint sidecar-check
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-shell e2e-elixir sidecar-build sidecar-test sidecar-lint sidecar-check
 
 # -- Development --
 
@@ -125,8 +125,32 @@ test-integration: ## Run only @tag :integration tests (requires real claude CLI)
 test-all: ## Run ALL tests including integration (requires real claude CLI)
 	mix test --include integration
 
-e2e: ## Run end-to-end sidecar ↔ gRPC ↔ gateway test
+e2e: sidecar-build ## Run full e2e: start Cortex, run Go sidecar test, clean up
+	@echo "Starting Cortex server..."
+	@CORTEX_GATEWAY_TOKEN=e2e-test-token mix phx.server &>/dev/null & \
+		CORTEX_PID=$$!; \
+		cleanup() { kill $$CORTEX_PID 2>/dev/null; wait $$CORTEX_PID 2>/dev/null; }; \
+		trap cleanup EXIT; \
+		echo "Waiting for Cortex to start..."; \
+		for i in $$(seq 1 30); do \
+			curl -sf http://localhost:4000/api/runs?limit=1 >/dev/null 2>&1 && break; \
+			sleep 1; \
+		done; \
+		if ! curl -sf http://localhost:4000/api/runs?limit=1 >/dev/null 2>&1; then \
+			echo "ERROR: Cortex did not start within 30s"; \
+			exit 1; \
+		fi; \
+		echo "Cortex is up. Running e2e tests..."; \
+		cd e2e && go test -v -timeout 90s; \
+		EXIT_CODE=$$?; \
+		echo "Cleaning up..."; \
+		exit $$EXIT_CODE
+
+e2e-shell: ## Run shell-based e2e sidecar ↔ gRPC ↔ gateway test
 	./test/e2e/sidecar_e2e_test.sh
+
+e2e-elixir: ## Run Elixir e2e test (WIP, requires ports 4011/9091 free)
+	mix test test/e2e/ --include e2e
 
 # -- Sidecar (Go) --
 
@@ -154,6 +178,6 @@ clean: ## Remove build artifacts
 	rm -rf _build deps
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 .DEFAULT_GOAL := help
