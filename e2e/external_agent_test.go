@@ -4,13 +4,13 @@
 //
 //	Go sidecar ↔ gRPC ↔ Gateway.Registry ↔ ExternalAgent ↔ Provider.External ↔ Executor
 //
-// Prerequisites:
-//   - Cortex running: mix phx.server (port 4000 HTTP, port 4001 gRPC)
-//   - Sidecar binary built: cd sidecar && make build
+// The test starts everything itself — Cortex server, Go sidecar, task poller —
+// and tears it all down on completion. No manual setup required.
 //
 // Run:
 //
-//	cd e2e && go test -v -tags e2e -timeout 60s
+//	make e2e
+//	# or: cd e2e && go test -v -timeout 120s
 package e2e
 
 import (
@@ -37,58 +37,66 @@ const (
 	pollInterval = 200 * time.Millisecond
 )
 
-// sidecarBin returns the path to the sidecar binary relative to this test file.
+func projectRoot() string {
+	// e2e/ is one level below the project root
+	return filepath.Join("..")
+}
+
 func sidecarBin() string {
-	return filepath.Join("..", "sidecar", "bin", "cortex-sidecar")
+	return filepath.Join(projectRoot(), "sidecar", "bin", "cortex-sidecar")
 }
 
 // TestExternalAgentE2E tests the full pipeline:
-// 1. Start Go sidecar → registers in Gateway via gRPC
-// 2. POST /api/runs with provider: external config → triggers Runner.run
-// 3. Poller goroutine auto-responds to tasks via sidecar HTTP API
-// 4. Poll GET /api/runs/:id until completed
-// 5. Assert run completed with correct team status
+//  1. Start Cortex server (mix phx.server)
+//  2. Start Go sidecar → registers in Gateway via gRPC
+//  3. POST /api/runs with provider: external config → triggers Runner.run
+//  4. Poller goroutine auto-responds to tasks via sidecar HTTP API
+//  5. Poll GET /api/runs/:id until completed
+//  6. Assert run completed successfully
 func TestExternalAgentE2E(t *testing.T) {
-	// Check prerequisites
+	// Check sidecar binary exists
 	if _, err := os.Stat(sidecarBin()); err != nil {
 		t.Fatalf("Sidecar binary not found at %s. Run: cd sidecar && make build", sidecarBin())
 	}
 
-	if !cortexHealthy() {
-		t.Fatal("Cortex is not running. Start with: mix phx.server")
+	// --- Start Cortex ---
+	cortex, err := startCortex(t)
+	if err != nil {
+		t.Fatalf("Failed to start Cortex: %v", err)
 	}
+	defer stopProcess(cortex, "Cortex", t)
 
-	// Ensure CORTEX_GATEWAY_TOKEN is set on the server side.
-	// The server reads this env var — it must be set before starting mix phx.server.
-	// For the test, we just need the sidecar to send the matching token.
+	if err := waitForCortex(30 * time.Second); err != nil {
+		t.Fatalf("Cortex did not start: %v", err)
+	}
+	t.Log("Cortex is up")
 
-	// Start sidecar
+	// --- Start sidecar ---
 	sidecar, err := startSidecar(t)
 	if err != nil {
 		t.Fatalf("Failed to start sidecar: %v", err)
 	}
-	defer stopSidecar(sidecar, t)
+	defer stopProcess(sidecar, "Sidecar", t)
 
-	// Wait for sidecar to be healthy and connected
 	if err := waitForSidecarHealth(30 * time.Second); err != nil {
 		t.Fatalf("Sidecar did not become healthy: %v", err)
 	}
 	t.Log("Sidecar is healthy and connected")
 
-	// Start task auto-responder in background
+	// --- Start task auto-responder ---
 	taskDone := make(chan string, 1)
 	stopPoller := make(chan struct{})
 	go taskPoller(t, taskDone, stopPoller)
 	defer close(stopPoller)
 
-	// Create and trigger a run via the REST API
+	// --- Create and trigger a run ---
 	runID, err := createRun(t)
 	if err != nil {
 		t.Fatalf("Failed to create run: %v", err)
 	}
 	t.Logf("Created run: %s", runID)
 
-	// Wait for run to complete
+	// --- Wait for run to complete ---
 	finalStatus, err := waitForRunCompletion(runID, 60*time.Second)
 	if err != nil {
 		t.Fatalf("Run did not complete: %v", err)
@@ -100,7 +108,7 @@ func TestExternalAgentE2E(t *testing.T) {
 		t.Errorf("Expected run status 'completed', got '%s'", finalStatus)
 	}
 
-	// Verify the poller handled a task
+	// --- Verify the poller handled a task ---
 	select {
 	case taskID := <-taskDone:
 		t.Logf("Task auto-responded: %s", taskID)
@@ -109,7 +117,25 @@ func TestExternalAgentE2E(t *testing.T) {
 	}
 }
 
-// --- Sidecar management ---
+// --- Process management ---
+
+func startCortex(t *testing.T) (*exec.Cmd, error) {
+	cmd := exec.Command("mix", "phx.server")
+	cmd.Dir = projectRoot()
+	cmd.Env = append(os.Environ(),
+		"CORTEX_GATEWAY_TOKEN="+authToken,
+		"MIX_ENV=dev",
+	)
+	cmd.Stdout = nil // suppress output
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start cortex: %w", err)
+	}
+
+	t.Logf("Cortex started (PID %d)", cmd.Process.Pid)
+	return cmd, nil
+}
 
 func startSidecar(t *testing.T) (*exec.Cmd, error) {
 	cmd := exec.Command(sidecarBin())
@@ -121,8 +147,8 @@ func startSidecar(t *testing.T) (*exec.Cmd, error) {
 		"CORTEX_AUTH_TOKEN="+authToken,
 		"CORTEX_SIDECAR_PORT="+sidecarPort,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = nil
+	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start sidecar: %w", err)
@@ -132,12 +158,27 @@ func startSidecar(t *testing.T) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-func stopSidecar(cmd *exec.Cmd, t *testing.T) {
+func stopProcess(cmd *exec.Cmd, name string, t *testing.T) {
 	if cmd.Process != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Log("Sidecar stopped")
+		t.Logf("%s stopped", name)
 	}
+}
+
+func waitForCortex(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(cortexAPI + "/runs?limit=1")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("cortex not ready after %s", timeout)
 }
 
 func waitForSidecarHealth(timeout time.Duration) error {
@@ -145,15 +186,16 @@ func waitForSidecarHealth(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(sidecarHTTP + "/health")
 		if err == nil {
-			defer resp.Body.Close()
 			var health struct {
 				Connected bool   `json:"connected"`
 				Status    string `json:"status"`
 				AgentID   string `json:"agent_id"`
 			}
 			if json.NewDecoder(resp.Body).Decode(&health) == nil && health.Connected && health.AgentID != "" {
+				resp.Body.Close()
 				return nil
 			}
+			resp.Body.Close()
 		}
 		time.Sleep(pollInterval)
 	}
@@ -161,15 +203,6 @@ func waitForSidecarHealth(timeout time.Duration) error {
 }
 
 // --- Cortex API ---
-
-func cortexHealthy() bool {
-	resp, err := http.Get(cortexAPI + "/runs?limit=1")
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == 200
-}
 
 func createRun(t *testing.T) (string, error) {
 	configYAML := fmt.Sprintf(`name: "e2e-external-test"
@@ -226,7 +259,6 @@ func waitForRunCompletion(runID string, timeout time.Duration) (string, error) {
 			time.Sleep(pollInterval)
 			continue
 		}
-		defer resp.Body.Close()
 
 		var result struct {
 			Data struct {
@@ -236,9 +268,11 @@ func waitForRunCompletion(runID string, timeout time.Duration) (string, error) {
 		if json.NewDecoder(resp.Body).Decode(&result) == nil {
 			status := result.Data.Status
 			if status == "completed" || status == "failed" {
+				resp.Body.Close()
 				return status, nil
 			}
 		}
+		resp.Body.Close()
 		time.Sleep(time.Second)
 	}
 	return "", fmt.Errorf("run %s did not finish within %s", runID, timeout)

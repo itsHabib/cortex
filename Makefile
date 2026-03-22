@@ -125,26 +125,8 @@ test-integration: ## Run only @tag :integration tests (requires real claude CLI)
 test-all: ## Run ALL tests including integration (requires real claude CLI)
 	mix test --include integration
 
-e2e: sidecar-build ## Run full e2e: start Cortex, run Go sidecar test, clean up
-	@echo "Starting Cortex server..."
-	@CORTEX_GATEWAY_TOKEN=e2e-test-token mix phx.server &>/dev/null & \
-		CORTEX_PID=$$!; \
-		cleanup() { kill $$CORTEX_PID 2>/dev/null; wait $$CORTEX_PID 2>/dev/null; }; \
-		trap cleanup EXIT; \
-		echo "Waiting for Cortex to start..."; \
-		for i in $$(seq 1 30); do \
-			curl -sf http://localhost:4000/api/runs?limit=1 >/dev/null 2>&1 && break; \
-			sleep 1; \
-		done; \
-		if ! curl -sf http://localhost:4000/api/runs?limit=1 >/dev/null 2>&1; then \
-			echo "ERROR: Cortex did not start within 30s"; \
-			exit 1; \
-		fi; \
-		echo "Cortex is up. Running e2e tests..."; \
-		cd e2e && go test -v -timeout 90s; \
-		EXIT_CODE=$$?; \
-		echo "Cleaning up..."; \
-		exit $$EXIT_CODE
+e2e: sidecar-build ## Run full e2e: starts Cortex + sidecar, runs test, cleans up
+	cd e2e && go test -v -timeout 120s
 
 e2e-shell: ## Run shell-based e2e sidecar ↔ gRPC ↔ gateway test
 	./test/e2e/sidecar_e2e_test.sh
