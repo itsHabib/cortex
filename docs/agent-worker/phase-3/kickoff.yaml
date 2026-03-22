@@ -1,29 +1,67 @@
 name: "agent-worker-phase-3"
-description: "Agent Worker V2 — Claude API with tools"
+description: "Postgres + Docker + SpawnBackend.Docker/K8s"
+status: pending
 
 dependencies:
   - docs/agent-worker/phase-2/kickoff.yaml
+  - docs/compute-spawning/PROJECT.md
   - docs/compute-spawning/agent-worker-design.md
 
 goals:
-  - Replace claude -p with direct Claude Messages API calls (Anthropic Go SDK)
-  - Implement agentic loop (tool calls -> execute -> feed back -> repeat)
-  - Add peer communication tools (send_message, ask_agent, check_inbox, broadcast)
-  - Worker translates tool calls to sidecar HTTP API calls
-  - Token and cost tracking in the result
+  - Swap SQLite -> Postgres (Ecto adapter change)
+  - Dockerfile for Cortex (Elixir release)
+  - Dockerfile for sidecar + agent-worker
+  - Docker Compose for local dev (Cortex + Postgres + sidecar + worker)
+  - SpawnBackend.Docker — Cortex auto-spawns containers
+  - SpawnBackend.K8s — Cortex creates K8s pods
+
+outcome: |
+  Production-deployable Cortex. docker compose up starts everything.
+  backend: docker in YAML config means Cortex auto-spawns sidecar + worker
+  containers per agent. backend: k8s does the same with K8s pods.
 
 tasks:
-  - name: claude-api-client
-    summary: "Direct Claude Messages API calls via Anthropic Go SDK"
-  - name: agentic-loop
-    summary: "Tool call -> execute -> feed back -> repeat loop"
-  - name: peer-tools
-    summary: "Peer communication tools: send_message, ask_agent, check_inbox, broadcast"
-  - name: tool-translation
-    summary: "Worker translates tool calls to sidecar HTTP API calls"
-  - name: cost-tracking
-    summary: "Token and cost tracking in the result"
+  - name: postgres-adapter
+    summary: "Swap SQLite -> Postgres via Ecto adapter change"
+    details: |
+      Change Ecto adapter from ecto_sqlite3 to postgrex.
+      Update config/config.exs, config/dev.exs, config/test.exs.
+      Verify all migrations work. All tests pass against Postgres.
+
+  - name: cortex-dockerfile
+    summary: "Dockerfile for Cortex (Elixir release)"
+    details: |
+      Multi-stage build: deps → compile → release.
+      Include mix release config. Expose ports 4000 (HTTP) and 4001 (gRPC).
+
+  - name: worker-dockerfile
+    summary: "Dockerfile for sidecar + agent-worker"
+    details: |
+      Single image with both binaries. Entrypoint script starts sidecar,
+      waits for health, then starts agent-worker.
+
+  - name: docker-compose
+    summary: "Docker Compose for local dev"
+    details: |
+      Services: cortex (Elixir), postgres, and optionally sidecar + worker
+      for testing external configs. Shared network.
+
+  - name: spawn-backend-docker
+    summary: "SpawnBackend.Docker — auto-spawn agent containers"
+    details: |
+      When config says backend: docker, Cortex calls Docker Engine API
+      to run sidecar + worker containers. Reuse the worker-dockerfile image.
+      Set env vars for gateway URL, agent name, auth token.
+      Monitor container health, clean up on run completion.
+
+  - name: spawn-backend-k8s
+    summary: "SpawnBackend.K8s — auto-spawn K8s pods"
+    details: |
+      When config says backend: k8s, Cortex creates a Pod spec with
+      two containers (sidecar + worker) sharing localhost.
+      Uses k8s Elixir library for API communication.
+      Clean up pods on run completion.
 
 verify:
-  - "make worker-build"
+  - "docker compose up -d && mix test"
   - "make e2e"

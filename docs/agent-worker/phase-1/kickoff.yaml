@@ -1,5 +1,8 @@
 name: "agent-worker-phase-1"
 description: "Ungate external agent infrastructure + Agent Worker V1 (claude -p)"
+status: done
+completed: 2026-03-22
+commit: 0803acc
 
 dependencies:
   - docs/compute-spawning/agent-worker-design.md
@@ -11,79 +14,53 @@ goals:
   - Build and test the agent-worker Go binary (V1 — claude -p)
   - Add make targets for worker-build
   - Update e2e test to use real agent-worker
+  - USE_CLAUDE=1 flag for real Claude e2e testing
   - All tests pass (mix test + make e2e)
 
 tasks:
   - name: ungate-grpc
+    status: done
     summary: "Re-enable gRPC server in config/config.exs"
-    details: |
-      Set start_server: true for Cortex.Gateway.GrpcEndpoint.
-      Remove the gating comment.
-    files:
-      - config/config.exs
+    files: [config/config.exs]
 
   - name: ungate-validator
+    status: done
     summary: "Remove external provider block in validator"
-    details: |
-      Make validate_external_blocked a no-op (return errors unchanged).
-      Remove the blocking clause for :external.
-    files:
-      - lib/cortex/orchestration/config/validator.ex
+    files: [lib/cortex/orchestration/config/validator.ex]
 
   - name: ungate-application
+    status: done
     summary: "Add ExternalSupervisor back to supervision tree"
-    details: |
-      Re-add the ExternalSupervisor child spec to Cortex.Application,
-      placed before the Task.Supervisor (just like the pre-gating commit).
-    files:
-      - lib/cortex/application.ex
+    files: [lib/cortex/application.ex]
 
   - name: ungate-executor
+    status: done
     summary: "Restore Provider.External dispatch path in executor"
-    details: |
-      Re-add aliases: ExternalAgent, ExternalSupervisor, Provider.External.
-      Re-add dispatch_to_provider clause for ProviderExternal.
-      Re-add run_via_external_agent and ensure_external_agent helpers.
-    files:
-      - lib/cortex/orchestration/runner/executor.ex
+    files: [lib/cortex/orchestration/runner/executor.ex]
 
   - name: ungate-tests
+    status: done
     summary: "Remove :external from test exclusion + update test assertions"
-    details: |
-      test/test_helper.exs — remove :external from exclude list.
-      validator_test.exs — update "provider :external is blocked" tests
-        to assert {:ok, ...} instead of {:error, ...}.
-      loader_test.exs — update "external provider is blocked" test
-        to assert {:ok, ...} (parses successfully now).
     files:
       - test/test_helper.exs
       - test/cortex/orchestration/config/validator_test.exs
       - test/cortex/orchestration/config/loader_test.exs
-
-  - name: verify-elixir
-    summary: "Run mix test — all tests must pass"
-    verify: "mix test"
+      - test/cortex/agent/external_supervisor_test.exs
+      - test/cortex/orchestration/runner/executor_external_test.exs
 
   - name: worker-build
+    status: done
     summary: "Add make worker-build target and verify Go build"
-    details: |
-      Add worker-build target to Makefile that builds sidecar/cmd/agent-worker
-      into bin/agent-worker. Verify the binary builds successfully.
-    files:
-      - Makefile
-      - sidecar/Makefile
+    files: [Makefile, sidecar/Makefile]
 
   - name: e2e-update
-    summary: "Update e2e test and make e2e to use real agent-worker"
-    details: |
-      Update e2e/external_agent_test.go to use the real agent-worker binary
-      instead of the fake poller. Update make e2e to build agent-worker first.
-    files:
-      - e2e/external_agent_test.go
-      - Makefile
+    status: done
+    summary: "Update e2e test to use real agent-worker + USE_CLAUDE=1 flag"
+    files: [e2e/external_agent_test.go, Makefile]
 
 verify:
-  - "mix test"
-  - "mix compile --warnings-as-errors"
-  - "mix format --check-formatted"
-  - "make worker-build"
+  - "mix test"                          # 1382 tests, 0 failures
+  - "mix compile --warnings-as-errors"  # clean
+  - "mix format --check-formatted"      # clean
+  - "make worker-build"                 # builds bin/agent-worker
+  - "USE_CLAUDE=1 make e2e"             # verified with real Claude (178s)

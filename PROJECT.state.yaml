@@ -12,7 +12,7 @@
 #   blocked     — explicitly blocked (see notes)
 
 project: cortex
-updated: 2026-03-22
+updated: 2026-03-22  # restructured: agent-worker + agent-intelligence tracks
 
 tracks:
   core-phases:
@@ -34,13 +34,7 @@ tracks:
   compute-spawning:
     description: "Provider & SpawnBackend abstractions for remote compute"
     project_doc: docs/compute-spawning/PROJECT.md
-    status: paused
-    decision: |
-      External agent infrastructure (gRPC, sidecar, Provider.External) is gated.
-      Cortex focuses on being the best local CLI orchestrator (provider: cli).
-      External/distributed execution deferred to a potential Go CLI rewrite.
-      Code stays in the repo but is not active — gRPC server disabled,
-      Provider.External blocked at validation, ExternalSupervisor removed from app tree.
+    status: in_progress
     phases:
       phase-1-foundation:
         config: docs/compute-spawning/phase-1-foundation/kickoff.yaml
@@ -50,9 +44,9 @@ tracks:
         notes: "Provider/SpawnBackend behaviours, Provider.CLI + SpawnBackend.Local, config + orchestration wired"
       phase-2-http-provider:
         config: docs/compute-spawning/phase-2-http-provider/kickoff.yaml
-        status: next
+        status: pending
         depends_on: [phase-1-foundation]
-        notes: "Provider.HTTP — call Claude Messages API directly with agentic loop"
+        notes: "Provider.HTTP — call Claude Messages API directly with agentic loop (independent track)"
       phase-3-external-provider:
         config: docs/compute-spawning/phase-3-external-provider/kickoff.yaml
         status: done
@@ -67,11 +61,44 @@ tracks:
         commit: 5d7b9d9
         depends_on: [phase-3-external-provider]
         notes: "ExternalAgent GenServer + executor integration + QE bug smash (3 crash fixes, 15 adversarial tests)"
-      phase-4-remote-backends:
-        config: docs/compute-spawning/phase-4-remote-backends/kickoff.yaml
-        status: deferred
-        depends_on: [phase-3.5-external-agent]
-        notes: "Deferred — remote backends belong in Go CLI rewrite, not Elixir Cortex"
+
+  agent-worker:
+    description: "Agent worker pipeline — local spawning, Docker/K8s deployment, agent intelligence"
+    project_doc: docs/compute-spawning/agent-worker-design.md
+    status: in_progress
+    phases:
+      phase-1-ungate-worker-v1:
+        config: docs/agent-worker/phase-1/kickoff.yaml
+        status: done
+        completed: 2026-03-22
+        commit: 0803acc
+        notes: "Ungated external infra, agent-worker V1 (claude -p), make targets, e2e with USE_CLAUDE=1"
+      phase-2-spawnbackend-local:
+        config: docs/agent-worker/phase-2/kickoff.yaml
+        status: next
+        depends_on: [phase-1-ungate-worker-v1]
+        notes: "SpawnBackend.Local for external — auto-spawn sidecar + worker, no manual terminals"
+      phase-3-docker-k8s:
+        config: docs/agent-worker/phase-3/kickoff.yaml
+        status: pending
+        depends_on: [phase-2-spawnbackend-local]
+        notes: "Postgres, Dockerfiles, Docker Compose, SpawnBackend.Docker + SpawnBackend.K8s"
+
+  agent-intelligence:
+    description: "Agent smarts — peer-aware prompts, Worker V2 with Claude API + tools"
+    status: pending
+    notes: "Independent track, can start anytime after agent-worker phase 1"
+    phases:
+      peer-prompts:
+        config: docs/agent-worker/agent-intelligence/peer-prompts.yaml
+        status: pending
+        depends_on: [agent-worker/phase-1-ungate-worker-v1]
+        notes: "Extended prompts with peer roster + sidecar API docs"
+      worker-v2:
+        config: docs/agent-worker/agent-intelligence/worker-v2.yaml
+        status: pending
+        depends_on: [peer-prompts]
+        notes: "Claude API directly, agentic tool loop, peer communication tools"
 
   cluster-mode:
     description: "Agent mesh with external registration, gRPC data plane, sidecar"

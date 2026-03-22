@@ -1,0 +1,26 @@
+name: "agent-intelligence-peer-prompts"
+description: "Extended prompts with peer awareness — agents know about each other"
+status: pending
+
+dependencies:
+  - docs/agent-worker/phase-1/kickoff.yaml
+  - docs/compute-spawning/agent-worker-design.md
+
+goals:
+  - Modify executor's prompt builder to include active peer roster
+  - Add sidecar API docs to prompt context
+  - Add peer info to TaskRequest context map
+  - Verify with external-dag.yaml — each agent's prompt lists peers
+
+tasks:
+  - name: peer-roster
+    summary: "Query Gateway.Registry for active peers and inject into prompt"
+  - name: sidecar-api-docs
+    summary: "Add sidecar HTTP API docs to prompt context"
+  - name: task-context
+    summary: "Add peer info to TaskRequest context map"
+  - name: verify-dag
+    summary: "Verify with external-dag.yaml — each agent's prompt lists peers"
+
+verify:
+  - "mix test"

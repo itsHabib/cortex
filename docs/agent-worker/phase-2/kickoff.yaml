@@ -1,25 +1,96 @@
 name: "agent-worker-phase-2"
-description: "Extended prompt with peer awareness"
+description: "SpawnBackend.Local for external — auto-spawn sidecar + worker locally"
+status: next
 
 dependencies:
   - docs/agent-worker/phase-1/kickoff.yaml
-  - docs/compute-spawning/agent-worker-design.md
+  - docs/compute-spawning/PROJECT.md
 
 goals:
-  - Modify executor's prompt builder to include active peer roster
-  - Add sidecar API docs to prompt context
-  - Add peer info to TaskRequest context map
-  - Verify with external-dag.yaml
+  - provider: external + backend: local spawns sidecar + worker automatically
+  - No manual terminal setup — paste YAML in UI, click launch, done
+  - Manage lifecycle — start before dispatch, stop after run finishes
+  - Port allocation — pick free ports for each sidecar
+
+outcome: |
+  Users can run external agent configs from the UI or CLI without manually
+  starting sidecars and workers. Cortex forks the processes, waits for
+  registration, dispatches work, and cleans up on completion.
 
 tasks:
-  - name: peer-roster
-    summary: "Query Gateway.Registry for active peers and inject into prompt"
-  - name: sidecar-api-docs
-    summary: "Add sidecar HTTP API docs to prompt context"
-  - name: task-context
-    summary: "Add peer info to TaskRequest context map"
-  - name: verify-dag
-    summary: "Verify with external-dag.yaml — each agent's prompt lists peers"
+  - name: local-spawn-external
+    summary: "Extend SpawnBackend.Local to handle provider: external"
+    details: |
+      When executor sees provider: external + backend: local:
+      1. Pick a free port for the sidecar
+      2. Fork cortex-sidecar binary as a Port with env vars:
+         CORTEX_GATEWAY_URL, CORTEX_AGENT_NAME, CORTEX_AUTH_TOKEN, CORTEX_SIDECAR_PORT
+      3. Wait for the agent to appear in Gateway.Registry (poll with timeout)
+      4. Fork agent-worker binary as a Port with env vars:
+         SIDECAR_URL pointing at the sidecar port
+      5. Return handle with both PIDs for cleanup
+    files:
+      - lib/cortex/spawn_backend/local.ex
+
+  - name: lifecycle-management
+    summary: "Start before dispatch, stop after run completes"
+    details: |
+      The executor needs to:
+      - Spawn sidecar + worker before dispatching to Provider.External
+      - Store the process handles (PIDs/ports)
+      - Kill both processes when the team run finishes (success or failure)
+      - Handle crashes gracefully — if sidecar dies mid-run, clean up worker too
+    files:
+      - lib/cortex/orchestration/runner/executor.ex
+      - lib/cortex/spawn_backend/local.ex
+
+  - name: binary-discovery
+    summary: "Find sidecar and worker binaries on disk"
+    details: |
+      Need a way to locate the binaries. Options:
+      - Config: sidecar_bin / worker_bin paths in config.exs
+      - Convention: look in sidecar/bin/ relative to project root
+      - Env vars: CORTEX_SIDECAR_BIN / CORTEX_WORKER_BIN
+    files:
+      - config/config.exs
+      - lib/cortex/spawn_backend/local.ex
+
+  - name: port-allocation
+    summary: "Pick free ports for each sidecar instance"
+    details: |
+      For DAG configs with multiple external teams, each needs its own sidecar
+      on a unique port. Use :gen_tcp.listen(0, ...) to find free ports, or
+      allocate from a range (9091+).
+    files:
+      - lib/cortex/spawn_backend/local.ex
+
+  - name: gateway-token
+    summary: "Auto-generate or reuse gateway auth token"
+    details: |
+      Sidecar needs CORTEX_AUTH_TOKEN to connect. Either:
+      - Read from Application config (CORTEX_GATEWAY_TOKEN env var)
+      - Generate a one-time token for the run
+    files:
+      - lib/cortex/spawn_backend/local.ex
+
+  - name: tests
+    summary: "Tests for local external spawning"
+    details: |
+      - Unit test: SpawnBackend.Local spawns and stops sidecar + worker
+      - Integration test: full run with provider: external, backend: local
+      - Edge cases: binary not found, sidecar fails to register, port conflict
+    files:
+      - test/cortex/spawn_backend/local_test.exs
+      - test/cortex/orchestration/runner/executor_external_test.exs
+
+  - name: e2e-local-spawn
+    summary: "E2e test that uses backend: local instead of manual processes"
+    details: |
+      New e2e test or update existing: POST a config with
+      provider: external + backend: local, verify Cortex spawns everything
+      and the run completes without any manual sidecar/worker setup.
 
 verify:
   - "mix test"
+  - "mix compile --warnings-as-errors"
+  - "make e2e"
