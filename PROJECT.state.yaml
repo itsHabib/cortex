@@ -12,7 +12,7 @@
 #   blocked     — explicitly blocked (see notes)
 
 project: cortex
-updated: 2026-03-22  # restructured: agent-worker + agent-intelligence tracks
+updated: 2026-03-22  # phase-2-spawnbackend-local done
 
 tracks:
   core-phases:
@@ -75,12 +75,14 @@ tracks:
         notes: "Ungated external infra, agent-worker V1 (claude -p), make targets, e2e with USE_CLAUDE=1"
       phase-2-spawnbackend-local:
         config: docs/agent-worker/phase-2/kickoff.yaml
-        status: next
+        status: done
+        completed: 2026-03-22
+        commit: 1cc347d
         depends_on: [phase-1-ungate-worker-v1]
-        notes: "SpawnBackend.Local for external — auto-spawn sidecar + worker, no manual terminals"
+        notes: "ExternalSpawner auto-spawns sidecar + worker, env inheritance, NDJSON token parsing, end-of-run telemetry"
       phase-3-docker-k8s:
         config: docs/agent-worker/phase-3/kickoff.yaml
-        status: pending
+        status: next
         depends_on: [phase-2-spawnbackend-local]
         notes: "Postgres, Dockerfiles, Docker Compose, SpawnBackend.Docker + SpawnBackend.K8s"
 
@@ -91,7 +93,7 @@ tracks:
     phases:
       peer-prompts:
         config: docs/agent-worker/agent-intelligence/peer-prompts.yaml
-        status: pending
+        status: next
         depends_on: [agent-worker/phase-1-ungate-worker-v1]
         notes: "Extended prompts with peer roster + sidecar API docs"
       worker-v2:
