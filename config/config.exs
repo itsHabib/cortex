@@ -29,6 +29,12 @@ config :cortex, Cortex.SpawnBackend.Local,
   sidecar_bin: "sidecar/bin/cortex-sidecar",
   worker_bin: "sidecar/bin/agent-worker"
 
+config :cortex, Cortex.SpawnBackend.K8s,
+  namespace: "cortex",
+  sidecar_image: "cortex-sidecar:latest",
+  worker_image: "cortex-agent-worker:latest",
+  gateway_url: "cortex-gateway:4001"
+
 config :phoenix, :json_library, Jason
 
 config :tailwind, :version, "4.1.12"

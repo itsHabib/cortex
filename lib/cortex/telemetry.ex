@@ -63,6 +63,21 @@ defmodule Cortex.Telemetry do
   @gateway_task_dispatched [:cortex, :gateway, :task, :dispatched]
   @gateway_task_completed [:cortex, :gateway, :task, :completed]
 
+  # -- Docker Event Name Definitions --
+
+  @docker_spawn_start [:cortex, :docker, :spawn_start]
+  @docker_spawn_complete [:cortex, :docker, :spawn_complete]
+  @docker_spawn_failed [:cortex, :docker, :spawn_failed]
+  @docker_stop_complete [:cortex, :docker, :stop_complete]
+  @docker_cleanup [:cortex, :docker, :cleanup]
+
+  # -- K8s SpawnBackend Event Name Definitions --
+
+  @k8s_pod_created [:cortex, :k8s, :pod, :created]
+  @k8s_pod_ready [:cortex, :k8s, :pod, :ready]
+  @k8s_pod_deleted [:cortex, :k8s, :pod, :deleted]
+  @k8s_pod_failed [:cortex, :k8s, :pod, :failed]
+
   @doc "Returns the list of all Cortex telemetry event names."
   @spec event_names() :: [list(atom())]
   def event_names do
@@ -86,7 +101,16 @@ defmodule Cortex.Telemetry do
       @gateway_agent_unregistered,
       @gateway_agent_heartbeat,
       @gateway_task_dispatched,
-      @gateway_task_completed
+      @gateway_task_completed,
+      @docker_spawn_start,
+      @docker_spawn_complete,
+      @docker_spawn_failed,
+      @docker_stop_complete,
+      @docker_cleanup,
+      @k8s_pod_created,
+      @k8s_pod_ready,
+      @k8s_pod_deleted,
+      @k8s_pod_failed
     ]
   end
 
@@ -234,5 +258,68 @@ defmodule Cortex.Telemetry do
   def emit_gateway_task_completed(metadata) when is_map(metadata) do
     measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
     :telemetry.execute(@gateway_task_completed, measurements, metadata)
+  end
+
+  # -- Docker Emission Helpers --
+
+  @doc "Emits a `[:cortex, :docker, :spawn_start]` event."
+  @spec emit_docker_spawn_start(map()) :: :ok
+  def emit_docker_spawn_start(metadata) when is_map(metadata) do
+    :telemetry.execute(@docker_spawn_start, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :docker, :spawn_complete]` event."
+  @spec emit_docker_spawn_complete(map()) :: :ok
+  def emit_docker_spawn_complete(metadata) when is_map(metadata) do
+    measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
+    :telemetry.execute(@docker_spawn_complete, measurements, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :docker, :spawn_failed]` event."
+  @spec emit_docker_spawn_failed(map()) :: :ok
+  def emit_docker_spawn_failed(metadata) when is_map(metadata) do
+    measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
+    :telemetry.execute(@docker_spawn_failed, measurements, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :docker, :stop_complete]` event."
+  @spec emit_docker_stop_complete(map()) :: :ok
+  def emit_docker_stop_complete(metadata) when is_map(metadata) do
+    measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
+    :telemetry.execute(@docker_stop_complete, measurements, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :docker, :cleanup]` event."
+  @spec emit_docker_cleanup(map()) :: :ok
+  def emit_docker_cleanup(metadata) when is_map(metadata) do
+    measurements = %{containers_removed: Map.get(metadata, :containers_removed, 0)}
+    :telemetry.execute(@docker_cleanup, measurements, metadata)
+  end
+
+  # -- K8s SpawnBackend Emission Helpers --
+
+  @doc "Emits a `[:cortex, :k8s, :pod, :created]` event."
+  @spec emit_k8s_pod_created(map()) :: :ok
+  def emit_k8s_pod_created(metadata) when is_map(metadata) do
+    :telemetry.execute(@k8s_pod_created, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :k8s, :pod, :ready]` event."
+  @spec emit_k8s_pod_ready(map()) :: :ok
+  def emit_k8s_pod_ready(metadata) when is_map(metadata) do
+    measurements = %{duration_ms: Map.get(metadata, :duration_ms, 0)}
+    :telemetry.execute(@k8s_pod_ready, measurements, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :k8s, :pod, :deleted]` event."
+  @spec emit_k8s_pod_deleted(map()) :: :ok
+  def emit_k8s_pod_deleted(metadata) when is_map(metadata) do
+    :telemetry.execute(@k8s_pod_deleted, %{system_time: System.system_time()}, metadata)
+  end
+
+  @doc "Emits a `[:cortex, :k8s, :pod, :failed]` event."
+  @spec emit_k8s_pod_failed(map()) :: :ok
+  def emit_k8s_pod_failed(metadata) when is_map(metadata) do
+    :telemetry.execute(@k8s_pod_failed, %{system_time: System.system_time()}, metadata)
   end
 end

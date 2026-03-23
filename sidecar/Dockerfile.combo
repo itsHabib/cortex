@@ -1,0 +1,33 @@
+# Stage 1: Build both Go binaries
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /cortex-sidecar ./cmd/cortex-sidecar
+RUN CGO_ENABLED=0 GOOS=linux go build -o /agent-worker ./cmd/agent-worker
+
+# Stage 2: Minimal runtime with shell for entrypoint script
+FROM alpine:3.19 AS runtime
+
+RUN apk add --no-cache curl
+
+COPY --from=builder /cortex-sidecar /cortex-sidecar
+COPY --from=builder /agent-worker /agent-worker
+COPY scripts/entrypoint.sh /entrypoint.sh
+
+RUN chmod +x /entrypoint.sh
+
+RUN adduser -D -h /home/worker worker
+USER worker
+
+EXPOSE 9090
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 --start-period=10s \
+  CMD curl -f http://localhost:${CORTEX_SIDECAR_PORT:-9090}/health || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -1,0 +1,52 @@
+# Build artifacts
+_build/
+deps/
+
+# Node/frontend
+node_modules/
+assets/node_modules/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test artifacts
+cover/
+test/
+
+# Documentation
+docs/
+
+# Sidecar (separate build context)
+sidecar/
+
+# Infrastructure
+infra/
+
+# Benchmarks
+bench/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Misc
+.elixir_ls/
+.dialyzer/
+.formatter.exs
+.credo.exs
+CLAUDE.md
+README.md

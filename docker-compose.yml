@@ -1,0 +1,55 @@
+services:
+  cortex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SECRET_KEY_BASE: "dev_secret_key_base_that_is_at_least_64_bytes_long_for_development_only_ok"
+      PHX_HOST: "localhost"
+      PORT: "4000"
+      GRPC_PORT: "4001"
+      CORTEX_GATEWAY_TOKEN: "dev-token"
+      DATABASE_PATH: "/app/data/cortex.db"
+    ports:
+      - "4000:4000"
+      - "4001:4001"
+    volumes:
+      - cortex-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - cortex-net
+    restart: unless-stopped
+
+  # Optional: for testing external agent configs
+  # Start with: docker compose --profile external up -d
+  sidecar-worker:
+    build:
+      context: ./sidecar
+      dockerfile: Dockerfile.combo
+    profiles: ["external"]
+    depends_on:
+      cortex:
+        condition: service_healthy
+    environment:
+      CORTEX_GATEWAY_URL: "cortex:4001"
+      CORTEX_AGENT_NAME: "test-agent"
+      CORTEX_AUTH_TOKEN: "dev-token"
+      CORTEX_SIDECAR_PORT: "9090"
+      SIDECAR_URL: "http://localhost:9090"
+    ports:
+      - "9091:9090"
+    networks:
+      - cortex-net
+    restart: unless-stopped
+
+networks:
+  cortex-net:
+    driver: bridge
+
+volumes:
+  cortex-data:

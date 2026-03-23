@@ -50,6 +50,9 @@ defmodule Cortex.MixProject do
       {:grpc, "~> 0.9"},
       {:protobuf, "~> 0.13"},
 
+      # Phase 3: K8s spawn backend
+      {:k8s, "~> 2.0"},
+
       # Phase 9: Performance
       {:benchee, "~> 1.3", only: :dev},
 

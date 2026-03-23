@@ -27,7 +27,7 @@ defmodule Cortex.TelemetryTest do
     test "returns all defined event names" do
       names = Telemetry.event_names()
       assert is_list(names)
-      assert length(names) == 20
+      assert length(names) == 29
 
       assert [:cortex, :agent, :started] in names
       assert [:cortex, :agent, :stopped] in names
@@ -49,6 +49,17 @@ defmodule Cortex.TelemetryTest do
       assert [:cortex, :gateway, :agent, :heartbeat] in names
       assert [:cortex, :gateway, :task, :dispatched] in names
       assert [:cortex, :gateway, :task, :completed] in names
+      # Docker spawn backend events
+      assert [:cortex, :docker, :spawn_start] in names
+      assert [:cortex, :docker, :spawn_complete] in names
+      assert [:cortex, :docker, :spawn_failed] in names
+      assert [:cortex, :docker, :stop_complete] in names
+      assert [:cortex, :docker, :cleanup] in names
+      # K8s spawn backend events
+      assert [:cortex, :k8s, :pod, :created] in names
+      assert [:cortex, :k8s, :pod, :ready] in names
+      assert [:cortex, :k8s, :pod, :deleted] in names
+      assert [:cortex, :k8s, :pod, :failed] in names
     end
   end
 

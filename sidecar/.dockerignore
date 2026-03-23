@@ -1,0 +1,21 @@
+# Build artifacts
+bin/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+README.md
+Makefile
+
+# Docker
+Dockerfile
+Dockerfile.combo
+.dockerignore

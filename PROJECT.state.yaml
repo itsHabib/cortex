@@ -12,7 +12,7 @@
 #   blocked     — explicitly blocked (see notes)
 
 project: cortex
-updated: 2026-03-22  # phase-3-docker-k8s plans done
+updated: 2026-03-23  # phase-3-docker-k8s code execution done
 
 tracks:
   core-phases:
@@ -83,7 +83,8 @@ tracks:
       phase-3-docker-k8s:
         config: docs/agent-worker/phase-3/kickoff.yaml
         plan_status: done
-        execute_status: not_started
+        execute_status: done
+        completed: 2026-03-23
         depends_on: [phase-2-spawnbackend-local]
         notes: "Dockerfiles, Docker Compose (SQLite retained), SpawnBackend.Docker + SpawnBackend.K8s"
 
