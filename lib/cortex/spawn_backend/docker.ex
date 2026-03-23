@@ -23,6 +23,7 @@ defmodule Cortex.SpawnBackend.Docker do
     - `:gateway_url` — gateway address for sidecar (default: `"host.docker.internal:4001"`)
     - `:gateway_token` — auth token (default: resolved from app config)
     - `:timeout_ms` — container-level timeout (default: `3_600_000`)
+    - `:env` — extra env vars for the worker container (list of `"KEY=VALUE"` strings)
     - `:docker_client` — HTTP client module (default: `Docker.Client`)
     - `:socket_path` — Docker socket path (default: `"/var/run/docker.sock"`)
     - `:registration_timeout_ms` — sidecar registration timeout (default: `30_000`)
@@ -251,16 +252,19 @@ defmodule Cortex.SpawnBackend.Docker do
     image = Keyword.get(opts, :image, @default_image)
     sidecar_name = container_name(run_id, team_name, "sidecar")
     api_key = System.get_env("ANTHROPIC_API_KEY") || ""
+    extra_env = Keyword.get(opts, :env, [])
 
     container_name = container_name(run_id, team_name, "worker")
+
+    base_env = [
+      "SIDECAR_URL=http://#{sidecar_name}:9091",
+      "ANTHROPIC_API_KEY=#{api_key}"
+    ]
 
     %{
       "name" => container_name,
       "Image" => image,
-      "Env" => [
-        "SIDECAR_URL=http://#{sidecar_name}:9091",
-        "ANTHROPIC_API_KEY=#{api_key}"
-      ],
+      "Env" => base_env ++ extra_env,
       "Cmd" => ["/agent-worker"],
       "Labels" => container_labels(run_id, team_name, "worker"),
       "HostConfig" => %{

@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-docker e2e-docker-dag e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check
 
 # -- Development --
 
@@ -129,7 +129,10 @@ e2e: sidecar-build worker-build ## Run full e2e: starts Cortex + sidecar, runs t
 	cd e2e && go test -v -timeout 300s
 
 e2e-docker: ## Run Docker spawn backend e2e tests (requires Docker daemon)
-	cd e2e && go test -v -run TestDocker -timeout 120s
+	cd e2e && go test -v -run "^TestDocker[^D]" -timeout 120s
+
+e2e-docker-dag: sidecar-build worker-build ## Run full DAG e2e with Docker containers (requires Docker)
+	cd e2e && go test -v -run TestDockerDAG -timeout 300s
 
 e2e-shell: ## Run shell-based e2e sidecar ↔ gRPC ↔ gateway test
 	./test/e2e/sidecar_e2e_test.sh

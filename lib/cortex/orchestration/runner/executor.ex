@@ -28,6 +28,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   alias Cortex.Orchestration.Workspace
   alias Cortex.Provider.External, as: ProviderExternal
   alias Cortex.Provider.Resolver, as: ProviderResolver
+  alias Cortex.SpawnBackend.Docker, as: DockerBackend
   alias Cortex.SpawnBackend.ExternalSpawner
   alias Cortex.Store.Schemas.TeamRun, as: TeamRunSchema
   alias Cortex.Telemetry, as: Tel
@@ -471,7 +472,16 @@ defmodule Cortex.Orchestration.Runner.Executor do
     ]
 
     result =
-      dispatch_to_provider(provider_mod, team_name, prompt, run_opts, command, workspace, backend)
+      dispatch_to_provider(
+        provider_mod,
+        team_name,
+        prompt,
+        run_opts,
+        command,
+        workspace,
+        backend,
+        run_id
+      )
 
     case result do
       {:ok, %TeamResult{status: :success} = team_result} ->
@@ -494,9 +504,10 @@ defmodule Cortex.Orchestration.Runner.Executor do
          run_opts,
          _command,
          _workspace,
-         backend
+         backend,
+         run_id
        ) do
-    spawn_handle = maybe_spawn_external(team_name, backend)
+    spawn_handle = maybe_spawn_external(team_name, backend, run_id)
 
     try do
       result = run_via_external_agent(team_name, prompt, run_opts)
@@ -514,7 +525,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
          run_opts,
          command,
          workspace,
-         _backend
+         _backend,
+         _run_id
        ) do
     provider_config = %{
       command: command,
@@ -530,10 +542,10 @@ defmodule Cortex.Orchestration.Runner.Executor do
     end
   end
 
-  # Spawns sidecar + worker locally if backend is :local and no sidecar is
-  # already registered. Returns the ExternalSpawner handle (or nil if skipped).
-  @spec maybe_spawn_external(String.t(), atom()) :: ExternalSpawner.handle() | nil
-  defp maybe_spawn_external(team_name, :local) do
+  # Spawns sidecar + worker for the given backend. Returns a handle or nil.
+  @spec maybe_spawn_external(String.t(), atom(), String.t()) ::
+          ExternalSpawner.handle() | DockerBackend.Handle.t() | nil
+  defp maybe_spawn_external(team_name, :local, _run_id) do
     if ExternalSpawner.already_registered?(team_name) do
       Logger.info("Executor: sidecar already registered for #{team_name}, skipping local spawn")
       nil
@@ -554,10 +566,32 @@ defmodule Cortex.Orchestration.Runner.Executor do
     end
   end
 
-  defp maybe_spawn_external(_team_name, _backend), do: nil
+  defp maybe_spawn_external(team_name, :docker, run_id) do
+    Logger.info("Executor: spawning Docker containers for #{team_name} (run=#{run_id})")
 
-  @spec maybe_stop_external(ExternalSpawner.handle() | nil) :: :ok
+    case DockerBackend.spawn(team_name: team_name, run_id: run_id) do
+      {:ok, handle} ->
+        Logger.info("Executor: Docker containers spawned for #{team_name}")
+        handle
+
+      {:error, reason} ->
+        Logger.warning(
+          "Executor: Docker spawn failed for #{team_name}: #{inspect(reason)}"
+        )
+
+        nil
+    end
+  end
+
+  defp maybe_spawn_external(_team_name, _backend, _run_id), do: nil
+
+  @spec maybe_stop_external(ExternalSpawner.handle() | DockerBackend.Handle.t() | nil) :: :ok
   defp maybe_stop_external(nil), do: :ok
+
+  defp maybe_stop_external(%DockerBackend.Handle{} = handle) do
+    DockerBackend.stop(handle)
+  end
+
   defp maybe_stop_external(handle), do: ExternalSpawner.stop(handle)
 
   # Emits token and activity events from an external provider result so the
