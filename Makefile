@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-docker e2e-docker-dag e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-all e2e e2e-docker-dag docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check
 
 # -- Development --
 
@@ -118,6 +118,15 @@ proto-check: proto ## CI: regenerate stubs and verify no diff
 	git diff --exit-code sidecar/internal/proto/ lib/cortex/gateway/proto/
 
 # -- Integration & E2E Tests --
+#
+# Test levels (see docs/testing.md for details):
+#
+#   Unit tests (mix test)        — mocked, no external deps
+#   Integration tests            — Docker API, gRPC, real processes (no Claude)
+#   E2E / Smoke tests            — full pipeline with real Claude agent
+#
+# "E2E" in this project means a real Claude agent completes real work.
+# Tests that exercise infrastructure without a real agent are "integration".
 
 test-integration: ## Run only @tag :integration tests (requires real claude CLI)
 	mix test --only integration
@@ -125,19 +134,19 @@ test-integration: ## Run only @tag :integration tests (requires real claude CLI)
 test-all: ## Run ALL tests including integration (requires real claude CLI)
 	mix test --include integration
 
-e2e: sidecar-build worker-build ## Run full e2e: starts Cortex + sidecar, runs test, cleans up
-	cd e2e && go test -v -timeout 300s
+e2e: sidecar-build worker-build ## E2E: local processes, real Claude (set USE_CLAUDE=1)
+	cd e2e && go test -v -run TestExternalAgentE2E -timeout 300s
 
-e2e-docker: ## Run Docker spawn backend e2e tests (requires Docker daemon)
-	cd e2e && go test -v -run "^TestDocker[^D]" -timeout 120s
-
-e2e-docker-dag: sidecar-build worker-build ## Run full DAG e2e with Docker containers (requires Docker)
+e2e-docker-dag: sidecar-build worker-build ## E2E: Docker containers, real Claude (set USE_CLAUDE=1)
 	cd e2e && go test -v -run TestDockerDAG -timeout 300s
 
-e2e-shell: ## Run shell-based e2e sidecar ↔ gRPC ↔ gateway test
+docker-integration: ## Integration: Docker API lifecycle (no Claude, no Cortex)
+	cd e2e && go test -v -run "^TestDocker[^D]" -timeout 120s
+
+e2e-shell: ## Integration: shell-based sidecar ↔ gRPC ↔ gateway test
 	./test/e2e/sidecar_e2e_test.sh
 
-e2e-elixir: ## Run Elixir e2e test (WIP, requires ports 4011/9091 free)
+e2e-elixir: ## Integration: Elixir-side external agent test (no Claude)
 	mix test test/e2e/ --include e2e
 
 # -- Sidecar (Go) --
