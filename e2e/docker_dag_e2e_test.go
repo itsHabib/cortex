@@ -214,6 +214,9 @@ func startCortexForDocker(t *testing.T) *exec.Cmd {
 		"CORTEX_GATEWAY_TOKEN="+dagAuthToken,
 		"MIX_ENV=dev",
 		"CLAUDE_COMMAND="+claudeCommand,
+		"CLAUDE_MODEL=haiku",
+		"CLAUDE_MAX_TURNS=3",
+		"CLAUDE_PERMISSION_MODE=bypassPermissions",
 	)
 	if testing.Verbose() {
 		cmd.Stdout = os.Stdout
@@ -330,8 +333,20 @@ func dumpContainerState(t *testing.T, d *dockerClient) {
 	for _, c := range containers {
 		labels, _ := c["Labels"].(map[string]any)
 		state, _ := c["State"].(string)
+		id, _ := c["Id"].(string)
 		t.Logf("  Container: role=%v team=%v state=%v names=%v",
 			labels["cortex.role"], labels["cortex.team"], state, c["Names"])
+		if id != "" {
+			logs, err := d.containerLogs(id)
+			if err == nil && logs != "" {
+				// Trim to last 40 lines to keep output manageable
+				lines := strings.Split(logs, "\n")
+				if len(lines) > 40 {
+					lines = lines[len(lines)-40:]
+				}
+				t.Logf("  --- logs (%s) ---\n%s", labels["cortex.role"], strings.Join(lines, "\n"))
+			}
+		}
 	}
 }
 

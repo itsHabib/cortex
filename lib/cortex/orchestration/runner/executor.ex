@@ -585,7 +585,8 @@ defmodule Cortex.Orchestration.Runner.Executor do
 
     # Forward worker-relevant env vars into Docker containers
     env =
-      ["CLAUDE_COMMAND", "POLL_INTERVAL_MS", "ANTHROPIC_API_KEY"]
+      ["CLAUDE_COMMAND", "CLAUDE_MODEL", "CLAUDE_MAX_TURNS", "CLAUDE_PERMISSION_MODE",
+       "POLL_INTERVAL_MS", "ANTHROPIC_API_KEY"]
       |> Enum.flat_map(fn key ->
         case System.get_env(key) do
           nil -> []

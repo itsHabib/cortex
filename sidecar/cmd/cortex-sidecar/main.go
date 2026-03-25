@@ -123,7 +123,7 @@ func run(cmd *cobra.Command, args []string) error {
 	apiServer := api.NewServer(stateAdapter, gwAdapter, logger.With("component", "http"))
 	router := api.NewRouter(apiServer)
 
-	httpAddr := fmt.Sprintf("127.0.0.1:%d", cfg.SidecarPort)
+	httpAddr := fmt.Sprintf("0.0.0.0:%d", cfg.SidecarPort)
 	httpServer := &http.Server{
 		Addr:              httpAddr,
 		Handler:           router,

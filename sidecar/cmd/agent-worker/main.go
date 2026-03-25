@@ -37,6 +37,9 @@ func main() {
 	sidecarURL := envOr("SIDECAR_URL", "http://localhost:9091")
 	pollInterval := envDurationMs("POLL_INTERVAL_MS", 500)
 	claudeCmd := envOr("CLAUDE_COMMAND", "claude")
+	claudeModel := os.Getenv("CLAUDE_MODEL")
+	claudeMaxTurns := os.Getenv("CLAUDE_MAX_TURNS")
+	claudePermMode := os.Getenv("CLAUDE_PERMISSION_MODE")
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger.Info("agent-worker starting",
@@ -89,7 +92,7 @@ func main() {
 			cr = mockResult(task.Prompt)
 			logger.Info("mock agent completed", "task_id", task.TaskID)
 		} else {
-			cr, runErr = runClaude(claudeCmd, task.Prompt)
+			cr, runErr = runClaude(claudeCmd, task.Prompt, claudeModel, claudeMaxTurns, claudePermMode)
 		}
 		duration := time.Since(start)
 
@@ -159,8 +162,18 @@ type claudeResult struct {
 }
 
 // runClaude executes the claude CLI with the given prompt and parses NDJSON output.
-func runClaude(command string, prompt string) (*claudeResult, error) {
-	cmd := exec.Command(command, "-p", prompt, "--output-format", "stream-json", "--verbose")
+func runClaude(command string, prompt string, model string, maxTurns string, permMode string) (*claudeResult, error) {
+	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if maxTurns != "" {
+		args = append(args, "--max-turns", maxTurns)
+	}
+	if permMode != "" {
+		args = append(args, "--permission-mode", permMode)
+	}
+	cmd := exec.Command(command, args...)
 
 	// Capture stderr for error diagnostics while also piping to container logs.
 	var stderrBuf bytes.Buffer
