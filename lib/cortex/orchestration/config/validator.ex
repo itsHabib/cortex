@@ -258,13 +258,19 @@ defmodule Cortex.Orchestration.Config.Validator do
   # backend: docker/k8s requires provider: external — the CLI provider runs
   # claude as a local Erlang port, which can't work inside a container.
   defp validate_backend_requires_external(errors, %Config{defaults: defaults, teams: teams}) do
-    errors = check_provider_backend_compat(errors, defaults.provider, defaults.backend, "defaults")
+    errors =
+      check_provider_backend_compat(errors, defaults.provider, defaults.backend, "defaults")
 
     Enum.reduce(teams, errors, fn team, acc ->
       effective_provider = team.provider || defaults.provider
       effective_backend = team.backend || defaults.backend
 
-      check_provider_backend_compat(acc, effective_provider, effective_backend, "team '#{team.name}'")
+      check_provider_backend_compat(
+        acc,
+        effective_provider,
+        effective_backend,
+        "team '#{team.name}'"
+      )
     end)
   end
 

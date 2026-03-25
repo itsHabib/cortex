@@ -42,6 +42,8 @@ defmodule CortexWeb.WorkflowsLive do
        workspace_path: "",
        model: "sonnet",
        max_turns: 200,
+       provider: "cli",
+       backend: "local",
 
        # DAG visual state
        dag_teams: [],
@@ -116,6 +118,8 @@ defmodule CortexWeb.WorkflowsLive do
     workspace = Map.get(params, "workspace_path", socket.assigns.workspace_path)
     project_name = Map.get(params, "project_name", socket.assigns.project_name)
     model = Map.get(params, "model", socket.assigns.model)
+    provider = Map.get(params, "provider", socket.assigns.provider)
+    backend = Map.get(params, "backend", socket.assigns.backend)
 
     max_turns =
       case Map.get(params, "max_turns") do
@@ -139,6 +143,8 @@ defmodule CortexWeb.WorkflowsLive do
        project_name: project_name,
        model: model,
        max_turns: max_turns,
+       provider: provider,
+       backend: backend,
        mesh_settings: mesh_settings,
        gossip_settings: gossip_settings,
        cluster_context: cluster_context,
@@ -626,6 +632,8 @@ defmodule CortexWeb.WorkflowsLive do
       yaml_content={@yaml_content}
       file_path={@file_path}
       workspace_path={@workspace_path}
+      provider={@provider}
+      backend={@backend}
       templates={@templates}
     />
     """
@@ -637,6 +645,8 @@ defmodule CortexWeb.WorkflowsLive do
       yaml_content={@yaml_content}
       file_path={@file_path}
       workspace_path={@workspace_path}
+      provider={@provider}
+      backend={@backend}
       templates={@templates}
     />
     """
@@ -648,6 +658,8 @@ defmodule CortexWeb.WorkflowsLive do
       yaml_content={@yaml_content}
       file_path={@file_path}
       workspace_path={@workspace_path}
+      provider={@provider}
+      backend={@backend}
       templates={@templates}
     />
     """
@@ -664,6 +676,7 @@ defmodule CortexWeb.WorkflowsLive do
       available_agents={@available_agents}
       agent_filter={@agent_filter}
     />
+    <DAGPanel.execution_settings provider={@provider} backend={@backend} />
     """
   end
 
@@ -680,6 +693,7 @@ defmodule CortexWeb.WorkflowsLive do
       available_agents={@available_agents}
       agent_filter={@agent_filter}
     />
+    <DAGPanel.execution_settings provider={@provider} backend={@backend} />
     """
   end
 
@@ -697,6 +711,7 @@ defmodule CortexWeb.WorkflowsLive do
       available_agents={@available_agents}
       agent_filter={@agent_filter}
     />
+    <DAGPanel.execution_settings provider={@provider} backend={@backend} />
     """
   end
 

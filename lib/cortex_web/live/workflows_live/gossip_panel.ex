@@ -15,6 +15,8 @@ defmodule CortexWeb.WorkflowsLive.GossipPanel do
   attr(:yaml_content, :string, required: true)
   attr(:file_path, :string, required: true)
   attr(:workspace_path, :string, required: true)
+  attr(:provider, :string, default: "cli")
+  attr(:backend, :string, default: "local")
   attr(:templates, :list, default: [])
 
   def yaml_panel(assigns) do
@@ -70,6 +72,8 @@ defmodule CortexWeb.WorkflowsLive.GossipPanel do
           placeholder="/path/to/project (default: /tmp)"
         />
       </div>
+
+      <CortexWeb.WorkflowsLive.DAGPanel.execution_settings provider={@provider} backend={@backend} />
     </div>
     """
   end

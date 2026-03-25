@@ -15,6 +15,8 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
   attr(:yaml_content, :string, required: true)
   attr(:file_path, :string, required: true)
   attr(:workspace_path, :string, required: true)
+  attr(:provider, :string, default: "cli")
+  attr(:backend, :string, default: "local")
   attr(:templates, :list, default: [])
 
   def yaml_panel(assigns) do
@@ -70,6 +72,8 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
           placeholder="/path/to/project (default: /tmp)"
         />
       </div>
+
+      <.execution_settings provider={@provider} backend={@backend} />
     </div>
     """
   end
@@ -270,6 +274,18 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
         <span class="text-sm text-gray-500">Model:</span>
         <span class="text-sm text-white ml-2">{@config.defaults.model}</span>
       </div>
+      <%= if @config.defaults.provider != :cli do %>
+        <div>
+          <span class="text-sm text-gray-500">Provider:</span>
+          <span class="text-sm text-white ml-2">{@config.defaults.provider}</span>
+        </div>
+      <% end %>
+      <%= if @config.defaults.backend != :local do %>
+        <div>
+          <span class="text-sm text-gray-500">Backend:</span>
+          <span class="text-sm text-white ml-2">{@config.defaults.backend}</span>
+        </div>
+      <% end %>
       <div class="pt-2">
         <span class="text-sm text-gray-500">Team Names:</span>
         <div class="flex flex-wrap gap-2 mt-1">
@@ -281,6 +297,45 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
           </span>
         </div>
       </div>
+    </div>
+    """
+  end
+
+  # -- Execution Settings (shared across modes) --
+
+  @doc """
+  Provider and backend dropdowns for controlling how agents execute.
+  """
+  attr(:provider, :string, default: "cli")
+  attr(:backend, :string, default: "local")
+
+  def execution_settings(assigns) do
+    ~H"""
+    <div class="bg-gray-900 rounded-lg border border-gray-800 p-6">
+      <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Execution</h3>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">Provider</label>
+          <select
+            name="provider"
+            class="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300"
+          >
+            <option value="cli" selected={@provider == "cli"}>CLI (local claude -p)</option>
+            <option value="external" selected={@provider == "external"}>External (sidecar + worker)</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 block mb-1">Backend</label>
+          <select
+            name="backend"
+            class="w-full bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300"
+          >
+            <option value="local" selected={@backend == "local"}>Local</option>
+            <option value="docker" selected={@backend == "docker"}>Docker</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-xs text-gray-600 mt-2">Docker backend requires provider "External".</p>
     </div>
     """
   end
@@ -321,11 +376,18 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
         ""
       end
 
+    provider_backend =
+      case {assigns[:provider], assigns[:backend]} do
+        {"cli", "local"} -> ""
+        {p, b} when is_binary(p) and is_binary(b) -> "\n  provider: #{p}\n  backend: #{b}"
+        _ -> ""
+      end
+
     """
     name: #{assigns.project_name}
     defaults:
       model: #{assigns.model}
-      max_turns: #{assigns.max_turns}#{workspace}
+      max_turns: #{assigns.max_turns}#{provider_backend}#{workspace}
     teams:
     #{teams_yaml}
     """
