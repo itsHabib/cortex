@@ -302,24 +302,24 @@ defmodule Cortex.Orchestration.WorkspaceTest do
 
   # --- Log Operations ---
 
-  describe "log_path/2" do
-    test "returns expected path", %{tmp_dir: tmp_dir} do
+  describe "log_path/3" do
+    test "returns expected path with run_id", %{tmp_dir: tmp_dir} do
       {:ok, ws} = init_workspace(tmp_dir)
-      expected = Path.join([tmp_dir, ".cortex", "logs", "backend.log"])
-      assert Workspace.log_path(ws, "backend") == expected
+      expected = Path.join([tmp_dir, ".cortex", "logs", "run-abc", "backend.log"])
+      assert Workspace.log_path(ws, "run-abc", "backend") == expected
     end
   end
 
-  describe "open_log/2" do
-    test "opens a writable file", %{tmp_dir: tmp_dir} do
+  describe "open_log/3" do
+    test "opens a writable file and creates run_id directory", %{tmp_dir: tmp_dir} do
       {:ok, ws} = init_workspace(tmp_dir)
-      assert {:ok, io} = Workspace.open_log(ws, "backend")
+      assert {:ok, io} = Workspace.open_log(ws, "run-abc", "backend")
 
       IO.write(io, "line 1\n")
       IO.write(io, "line 2\n")
       File.close(io)
 
-      log_content = File.read!(Workspace.log_path(ws, "backend"))
+      log_content = File.read!(Workspace.log_path(ws, "run-abc", "backend"))
       assert log_content == "line 1\nline 2\n"
     end
   end

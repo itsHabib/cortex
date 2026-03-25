@@ -50,8 +50,8 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
     - `{:ok, results}` — map of team_name => TeamResult for each resumed team
     - `{:error, reason}` — if workspace cannot be read
   """
-  @spec resume_run(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def resume_run(workspace_path, opts \\ []) do
+  @spec resume_run(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def resume_run(run_id, workspace_path, opts \\ []) do
     command = Keyword.get(opts, :command, "claude")
     timeout_minutes = Keyword.get(opts, :timeout_minutes, 30)
     auto_retry = Keyword.get(opts, :auto_retry, false)
@@ -64,6 +64,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
       dead_teams = find_dead_teams(state)
 
       resume_opts = %{
+        run_id: run_id,
         command: command,
         timeout_minutes: timeout_minutes,
         auto_retry: auto_retry,
@@ -136,7 +137,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
   end
 
   defp resume_single_team(workspace, team_name, opts) do
-    session_id = find_session_id(workspace, team_name)
+    session_id = find_session_id(workspace, opts.run_id, team_name)
 
     if session_id do
       do_resume_team(team_name, session_id, workspace, opts)
@@ -148,7 +149,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
 
   defp do_resume_team(team_name, session_id, workspace, opts) do
     Logger.info("Resuming #{team_name} (session: #{session_id})")
-    log_path = Workspace.log_path(workspace, team_name)
+    log_path = Workspace.log_path(workspace, opts.run_id, team_name)
 
     spawn_opts = [
       team_name: team_name,
@@ -215,7 +216,7 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
 
     changes =
       Enum.flat_map(running_teams, fn tr ->
-        log_path = Workspace.log_path(workspace, tr.team_name)
+        log_path = Workspace.log_path(workspace, run_id, tr.team_name)
 
         case LogParser.parse(log_path) do
           {:ok, report} ->
@@ -386,8 +387,8 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
     |> Enum.sort()
   end
 
-  @spec find_session_id(Workspace.t(), String.t()) :: String.t() | nil
-  defp find_session_id(workspace, team_name) do
+  @spec find_session_id(Workspace.t(), String.t(), String.t()) :: String.t() | nil
+  defp find_session_id(workspace, run_id, team_name) do
     case Workspace.read_registry(workspace) do
       {:ok, registry} ->
         entry = Enum.find(registry.teams, fn e -> e.name == team_name end)
@@ -395,12 +396,12 @@ defmodule Cortex.Orchestration.Runner.Reconciler do
         if entry && entry.session_id do
           entry.session_id
         else
-          log_path = Workspace.log_path(workspace, team_name)
+          log_path = Workspace.log_path(workspace, run_id, team_name)
           extract_session_id_from_log(log_path)
         end
 
       _ ->
-        log_path = Workspace.log_path(workspace, team_name)
+        log_path = Workspace.log_path(workspace, run_id, team_name)
         extract_session_id_from_log(log_path)
     end
   end

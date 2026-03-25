@@ -119,7 +119,7 @@ defmodule Cortex.Gossip.SessionRunner do
     run_id = Keyword.get(opts, :run_id)
 
     agent_names = Enum.map(config.agents, & &1.name)
-    coordinator? = config.gossip.coordinator
+    coordinator? = config.gossip.coordinator and config.defaults.provider != :external
 
     # Step 1: Set up workspace directories (include coordinator if enabled)
     all_participants = if coordinator?, do: agent_names ++ ["coordinator"], else: agent_names
@@ -256,7 +256,7 @@ defmodule Cortex.Gossip.SessionRunner do
 
   defp create_team_run_records(run_id, config, workspace_path) do
     Enum.each(config.agents, fn agent ->
-      log_path = Path.join([workspace_path, ".cortex", "logs", "#{agent.name}.log"])
+      log_path = Path.join([workspace_path, ".cortex", "logs", run_id, "#{agent.name}.log"])
 
       Cortex.Store.create_team_run(%{
         run_id: run_id,
@@ -372,7 +372,11 @@ defmodule Cortex.Gossip.SessionRunner do
     model = agent.model || config.defaults.model
     prompt = build_agent_prompt(agent, config, workspace_path)
 
-    log_dir = Path.join([workspace_path, ".cortex", "logs"])
+    log_dir =
+      if run_id,
+        do: Path.join([workspace_path, ".cortex", "logs", run_id]),
+        else: Path.join([workspace_path, ".cortex", "logs"])
+
     File.mkdir_p!(log_dir)
     log_path = Path.join(log_dir, "#{agent.name}.log")
 

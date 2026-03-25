@@ -493,7 +493,7 @@ defmodule CortexWeb.TeamDetailLive do
 
   defp spawn_resume_task(run_id, team_name, workspace_path) do
     Task.start(fn ->
-      log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+      log_path = Path.join([workspace_path, ".cortex", "logs", run_id, "#{team_name}.log"])
       {status, reason} = attempt_session_resume(team_name, log_path, workspace_path)
 
       Cortex.Events.broadcast(:team_resume_result, %{
@@ -529,7 +529,8 @@ defmodule CortexWeb.TeamDetailLive do
   end
 
   defp prepare_restart(socket, team_run, team_name, workspace_path) do
-    log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+    run_id = socket.assigns.run.id
+    log_path = Path.join([workspace_path, ".cortex", "logs", run_id, "#{team_name}.log"])
 
     restart_context =
       case LogParser.parse(log_path) do

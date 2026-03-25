@@ -290,16 +290,25 @@ defmodule CortexWeb.RunDetailLive do
 
       tools = Map.get(payload, :tools, [])
       details = Map.get(payload, :details, [])
+      activity_type = Map.get(payload, :type)
       text = format_tool_activity(tools, details)
+
+      {text, kind} =
+        cond do
+          text != "" -> {text, :tool}
+          activity_type == :session_started -> {"session started", :system}
+          true -> {"thinking…", :system}
+        end
 
       entry = %{
         team: team_name,
         text: text,
-        kind: :tool,
+        kind: kind,
         at: format_now()
       }
 
       activities = prepend_activity(socket.assigns.activities, entry)
+
       {:noreply, assign(socket, activities: activities, last_seen: last_seen)}
     else
       {:noreply, socket}
@@ -812,7 +821,7 @@ defmodule CortexWeb.RunDetailLive do
           })
         end
 
-        log_path = Path.join([run.workspace_path, ".cortex", "logs", "debug-agent.log"])
+        log_path = Path.join([run.workspace_path, ".cortex", "logs", run_id, "debug-agent.log"])
 
         # Persist to DB
         safe_store_call(fn ->
@@ -1296,7 +1305,7 @@ defmodule CortexWeb.RunDetailLive do
           })
         end
 
-        log_path = Path.join([workspace_path, ".cortex", "logs", "summary-agent.log"])
+        log_path = Path.join([workspace_path, ".cortex", "logs", run_id, "summary-agent.log"])
 
         # Persist to DB
         safe_store_call(fn ->
@@ -1458,6 +1467,9 @@ defmodule CortexWeb.RunDetailLive do
             <% else %>
               <.duration_display ms={@run.total_duration_ms} />
             <% end %>
+          </span>
+          <span class="ml-2 text-gray-500 text-xs font-mono" title={@run.id}>
+            {String.slice(@run.id || "", 0, 8)}
           </span>
           <span :if={@run.workspace_path} class="ml-2 text-gray-500 text-xs font-mono">
             {@run.workspace_path}
@@ -1685,7 +1697,7 @@ defmodule CortexWeb.RunDetailLive do
 
   # Extracted from handle_event("restart_team") to reduce cyclomatic complexity
   defp do_restart_team(socket, run, team_name, team_run, workspace_path) do
-    log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+    log_path = Path.join([workspace_path, ".cortex", "logs", run.id, "#{team_name}.log"])
 
     restart_context =
       case LogParser.parse(log_path) do
@@ -1845,7 +1857,7 @@ defmodule CortexWeb.RunDetailLive do
   end
 
   defp do_resume_all(run_id, workspace_path) do
-    case Runner.resume_run(workspace_path) do
+    case Runner.resume_run(run_id, workspace_path) do
       {:ok, results} ->
         Enum.each(results, fn {team_name, result} ->
           {status, reason} = classify_resume_result(result)
@@ -1872,7 +1884,7 @@ defmodule CortexWeb.RunDetailLive do
 
   defp spawn_resume_single_task(run_id, team_name, workspace_path) do
     Task.start(fn ->
-      log_path = Path.join([workspace_path, ".cortex", "logs", "#{team_name}.log"])
+      log_path = Path.join([workspace_path, ".cortex", "logs", run_id, "#{team_name}.log"])
 
       {status, reason} = attempt_session_resume(team_name, log_path, workspace_path)
 
@@ -2502,8 +2514,8 @@ defmodule CortexWeb.RunDetailLive do
   # -- Log/message reading --
 
   defp read_team_log(run, team_name) do
-    if run && run.workspace_path do
-      log_path = Path.join([run.workspace_path, ".cortex", "logs", "#{team_name}.log"])
+    if run && run.workspace_path && run.id do
+      log_path = Path.join([run.workspace_path, ".cortex", "logs", run.id, "#{team_name}.log"])
       parse_log_file(log_path)
     end
   end
@@ -2862,8 +2874,8 @@ defmodule CortexWeb.RunDetailLive do
   # -- Diagnostics helpers --
 
   defp load_diagnostics(run, team_name, opts) do
-    if run && run.workspace_path do
-      log_path = Path.join([run.workspace_path, ".cortex", "logs", "#{team_name}.log"])
+    if run && run.workspace_path && run.id do
+      log_path = Path.join([run.workspace_path, ".cortex", "logs", run.id, "#{team_name}.log"])
 
       case LogParser.parse(log_path) do
         {:ok, report} ->

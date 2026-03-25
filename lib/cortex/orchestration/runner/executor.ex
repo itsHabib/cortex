@@ -410,7 +410,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
     permission_mode = Injection.build_permission_mode(config.defaults)
     timeout_minutes = config.defaults.timeout_minutes
     prompt = Injection.build_prompt(team, config.name, state, config.defaults)
-    log_path = Workspace.log_path(workspace, team_name)
+    log_path = Workspace.log_path(workspace, run_id, team_name)
 
     on_token_update = fn name, tokens ->
       broadcast(:team_tokens_updated, %{
@@ -601,7 +601,9 @@ defmodule Cortex.Orchestration.Runner.Executor do
         {key, val} -> ["#{key}=#{val}"]
       end)
 
-    case DockerBackend.spawn(team_name: team_name, run_id: run_id, env: env) do
+    debug = Application.get_env(:cortex, :docker_debug, false)
+
+    case DockerBackend.spawn(team_name: team_name, run_id: run_id, env: env, debug: debug) do
       {:ok, handle} ->
         Logger.info("Executor: Docker containers spawned for #{team_name}")
         handle
@@ -724,24 +726,27 @@ defmodule Cortex.Orchestration.Runner.Executor do
             started_at: DateTime.utc_now(),
             workspace_path: workspace_path
           })
-
-          run_id
       end
-    end) || run_id
+    end)
+
+    run_id
   end
 
   defp resolve_run_id(nil, config, _workspace_path, team_names) do
-    RunnerStore.safe_call(fn ->
-      case Cortex.Store.create_run(%{
-             name: config.name,
-             status: "running",
-             team_count: length(team_names),
-             started_at: DateTime.utc_now()
-           }) do
-        {:ok, run} -> run.id
-        _ -> nil
-      end
-    end)
+    result =
+      RunnerStore.safe_call(fn ->
+        case Cortex.Store.create_run(%{
+               name: config.name,
+               status: "running",
+               team_count: length(team_names),
+               started_at: DateTime.utc_now()
+             }) do
+          {:ok, run} -> run.id
+          _ -> nil
+        end
+      end)
+
+    if is_binary(result), do: result, else: nil
   end
 
   # -- Fresh run finalization -------------------------------------------------
@@ -861,7 +866,7 @@ defmodule Cortex.Orchestration.Runner.Executor do
   defp upsert_team_run_record(run_id, name, config, state, workspace, tier_index) do
     team = find_team(config.teams, name)
     team_prompt = Injection.build_prompt(team, config.name, state, config.defaults)
-    team_log_path = Workspace.log_path(workspace, name)
+    team_log_path = Workspace.log_path(workspace, run_id, name)
 
     RunnerStore.safe_call(fn ->
       case Cortex.Store.get_team_run(run_id, name) do

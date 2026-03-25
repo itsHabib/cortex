@@ -41,7 +41,7 @@ defmodule Cortex.Orchestration.Coordinator.Lifecycle do
           Task.t() | nil
   def spawn(config, tiers, workspace, command, run_id, broadcast_fn) do
     prompt = Prompt.build(config, tiers, workspace.path)
-    log_path = Workspace.log_path(workspace, CoordConfig.name())
+    log_path = Workspace.log_path(workspace, run_id, CoordConfig.name())
 
     on_token_update = fn name, tokens ->
       broadcast_fn.(:team_tokens_updated, %{

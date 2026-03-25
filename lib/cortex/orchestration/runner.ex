@@ -151,10 +151,10 @@ defmodule Cortex.Orchestration.Runner do
   @doc """
   Resumes dead teams in a previously started run.
 
-  Delegates to `Runner.Reconciler.resume_run/2`.
+  Delegates to `Runner.Reconciler.resume_run/3`.
   """
-  @spec resume_run(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  defdelegate resume_run(workspace_path, opts \\ []), to: Reconciler
+  @spec resume_run(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  defdelegate resume_run(run_id, workspace_path, opts \\ []), to: Reconciler
 
   @doc """
   Reconciles workspace state by scanning log files for completed sessions.

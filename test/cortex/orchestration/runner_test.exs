@@ -167,9 +167,11 @@ defmodule Cortex.Orchestration.RunnerTest do
         {:ok, result} = Workspace.read_result(ws, "backend")
         assert result["status"] == "success"
 
-        # Verify log file exists
-        log_path = Workspace.log_path(ws, "backend")
-        assert File.exists?(log_path)
+        # Verify log file exists (under run_id subdir or flat when no DB)
+        log_dir = Path.join([tmp_dir, ".cortex", "logs"])
+        flat = Path.join(log_dir, "backend.log")
+        nested = Path.wildcard(Path.join([log_dir, "*", "backend.log"]))
+        assert File.exists?(flat) or length(nested) >= 1
       after
         cleanup(tmp_dir)
       end

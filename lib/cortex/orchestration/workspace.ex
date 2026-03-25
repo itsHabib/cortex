@@ -280,19 +280,23 @@ defmodule Cortex.Orchestration.Workspace do
   # --- Log Operations ---
 
   @doc """
-  Returns the log file path for a team.
+  Returns the log file path for a team within a specific run.
 
-  The path is `<workspace>/.cortex/logs/<team_name>.log`.
+  The path is `<workspace>/.cortex/logs/<run_id>/<team_name>.log`.
 
   ## Examples
 
-      iex> Workspace.log_path(ws, "backend")
-      "/tmp/project/.cortex/logs/backend.log"
+      iex> Workspace.log_path(ws, "abc-123", "backend")
+      "/tmp/project/.cortex/logs/abc-123/backend.log"
 
   """
-  @spec log_path(t(), String.t()) :: Path.t()
-  def log_path(%__MODULE__{path: path}, team_name) when is_binary(team_name) do
-    Path.join([path, @logs_dir, "#{team_name}.log"])
+  @spec log_path(t(), String.t() | nil, String.t()) :: Path.t()
+  def log_path(%__MODULE__{path: path}, run_id, team_name) when is_binary(team_name) do
+    if run_id do
+      Path.join([path, @logs_dir, run_id, "#{team_name}.log"])
+    else
+      Path.join([path, @logs_dir, "#{team_name}.log"])
+    end
   end
 
   @doc """
@@ -303,14 +307,15 @@ defmodule Cortex.Orchestration.Workspace do
 
   ## Examples
 
-      iex> {:ok, io} = Workspace.open_log(ws, "backend")
+      iex> {:ok, io} = Workspace.open_log(ws, "abc-123", "backend")
       iex> IO.write(io, "log line\\n")
       iex> File.close(io)
 
   """
-  @spec open_log(t(), String.t()) :: {:ok, File.io_device()} | {:error, term()}
-  def open_log(%__MODULE__{} = workspace, team_name) when is_binary(team_name) do
-    path = log_path(workspace, team_name)
+  @spec open_log(t(), String.t() | nil, String.t()) :: {:ok, File.io_device()} | {:error, term()}
+  def open_log(%__MODULE__{} = workspace, run_id, team_name) when is_binary(team_name) do
+    path = log_path(workspace, run_id, team_name)
+    File.mkdir_p!(Path.dirname(path))
     File.open(path, [:write, :utf8])
   end
 

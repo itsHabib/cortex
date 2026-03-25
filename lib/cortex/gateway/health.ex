@@ -72,16 +72,25 @@ defmodule Cortex.Gateway.Health do
     now = DateTime.utc_now()
 
     Enum.reduce(agents, state, fn agent, acc ->
-      cond do
-        agent.status == :disconnected ->
-          handle_disconnected_agent(agent, acc, now)
+      try do
+        cond do
+          agent.status == :disconnected ->
+            handle_disconnected_agent(agent, acc, now)
 
-        heartbeat_stale?(agent, acc.heartbeat_timeout_ms, now) ->
-          mark_disconnected(agent, acc, now)
+          heartbeat_stale?(agent, acc.heartbeat_timeout_ms, now) ->
+            mark_disconnected(agent, acc, now)
 
-        true ->
-          # Agent is healthy — remove from disconnected_at tracking if present
-          %{acc | disconnected_at: Map.delete(acc.disconnected_at, agent.id)}
+          true ->
+            # Agent is healthy — remove from disconnected_at tracking if present
+            %{acc | disconnected_at: Map.delete(acc.disconnected_at, agent.id)}
+        end
+      rescue
+        e ->
+          Logger.warning(
+            "Gateway.Health: error checking agent #{inspect(agent.id)}: #{Exception.message(e)}"
+          )
+
+          acc
       end
     end)
   end
@@ -98,10 +107,16 @@ defmodule Cortex.Gateway.Health do
   end
 
   defp mark_disconnected(agent, state, now) do
-    Registry.update_status_on(state.registry, agent.id, :disconnected)
+    result = Registry.update_status_on(state.registry, agent.id, :disconnected)
 
-    Logger.debug(
-      "Gateway.Health: marking agent #{agent.id} (#{agent.name}) as disconnected — heartbeat stale"
+    stale_ms =
+      case agent.last_heartbeat do
+        nil -> "never"
+        hb -> "#{DateTime.diff(now, hb, :second)}s ago"
+      end
+
+    Logger.info(
+      "Gateway.Health: marking agent #{agent.name} (#{agent.id}) as disconnected — heartbeat #{stale_ms}, result: #{inspect(result)}"
     )
 
     %{state | disconnected_at: Map.put(state.disconnected_at, agent.id, now)}
