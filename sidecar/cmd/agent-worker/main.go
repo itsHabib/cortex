@@ -161,12 +161,19 @@ type claudeResult struct {
 // runClaude executes the claude CLI with the given prompt and parses NDJSON output.
 func runClaude(command string, prompt string) (*claudeResult, error) {
 	cmd := exec.Command(command, "-p", prompt, "--output-format", "stream-json", "--verbose")
-	cmd.Stderr = os.Stderr
+
+	// Capture stderr for error diagnostics while also piping to container logs.
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	// claude -p buffers all NDJSON output until exit, so we collect
 	// it all at once and parse token counts from the final output.
 	output, err := cmd.Output()
 	if err != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		if stderr != "" {
+			return nil, fmt.Errorf("command failed: %w; stderr: %s", err, stderr)
+		}
 		return nil, fmt.Errorf("command failed: %w", err)
 	}
 

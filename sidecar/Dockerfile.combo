@@ -30,6 +30,7 @@ COPY scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 RUN adduser -D -h /home/worker worker
+ENV HOME=/home/worker
 USER worker
 
 EXPOSE 9090

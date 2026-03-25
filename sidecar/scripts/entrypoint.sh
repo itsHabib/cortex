@@ -1,6 +1,17 @@
 #!/bin/sh
 set -eu
 
+# If a command argument is passed, exec it directly (non-combo mode).
+# docker.ex passes Cmd to override the default behavior per-container:
+#   Cmd: ["/cortex-sidecar"]  → runs only the sidecar
+#   Cmd: ["/agent-worker"]    → runs only the worker
+#   (no Cmd)                  → combo mode (both in one container)
+if [ $# -gt 0 ]; then
+  exec "$@"
+fi
+
+# --- Combo mode: run both sidecar + worker in one container ---
+
 # Start sidecar in background
 /cortex-sidecar &
 SIDECAR_PID=$!
