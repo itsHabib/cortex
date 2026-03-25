@@ -170,10 +170,10 @@ e2e-docker-multi: sidecar-build worker-build ## Docker: 3-team multi-tier DAG (m
 	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s
 
 e2e-docker-simple-claude: docker-combo-claude sidecar-build worker-build ## Docker: single-team DAG, real Claude
-	USE_CLAUDE=1 cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s
+	cd e2e && USE_CLAUDE=1 go test -v -run TestDockerDAGSimple -timeout 300s
 
 e2e-docker-multi-claude: docker-combo-claude sidecar-build worker-build ## Docker: 3-team DAG, real Claude
-	USE_CLAUDE=1 cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s
+	cd e2e && USE_CLAUDE=1 go test -v -run TestDockerDAGMultiTeam -timeout 300s
 
 # --- Builds ---
 
