@@ -1,0 +1,37 @@
+# E2E test infrastructure — started by Makefile, not by Go tests.
+# Cortex server with Docker socket access so docker.ex can spawn worker containers.
+#
+# Usage:
+#   make e2e-docker-simple          # mock agent
+#   make e2e-docker-simple-claude   # real Claude
+services:
+  cortex:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    user: root # needs Docker socket access for docker.ex
+    environment:
+      SECRET_KEY_BASE: "e2e_test_secret_key_that_is_at_least_64_bytes_long_for_testing_purposes_only"
+      PHX_HOST: "localhost"
+      PORT: "4000"
+      GRPC_PORT: "4001"
+      CORTEX_GATEWAY_TOKEN: "e2e-docker-dag-token"
+      DATABASE_PATH: "/app/data/cortex.db"
+      CLAUDE_COMMAND: "${CLAUDE_COMMAND:-mock}"
+      CLAUDE_MODEL: "${CLAUDE_MODEL:-haiku}"
+      CLAUDE_MAX_TURNS: "${CLAUDE_MAX_TURNS:-3}"
+      CLAUDE_PERMISSION_MODE: "${CLAUDE_PERMISSION_MODE:-bypassPermissions}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    ports:
+      - "4000:4000"
+      - "4001:4001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs:
+      - /app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s

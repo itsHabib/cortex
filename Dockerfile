@@ -1,5 +1,5 @@
 # Stage 1: deps — install and compile dependencies
-FROM hexpm/elixir:1.17.3-erlang-27.2-debian-bookworm-20241016-slim AS deps
+FROM hexpm/elixir:1.17.3-erlang-27.2-ubuntu-jammy-20260217 AS deps
 
 RUN apt-get update -y && \
     apt-get install -y build-essential git && \
@@ -27,10 +27,10 @@ RUN mix compile
 RUN mix release
 
 # Stage 3: runtime — minimal image for running the release
-FROM debian:bookworm-20241016-slim AS runtime
+FROM ubuntu:jammy AS runtime
 
 RUN apt-get update -y && \
-    apt-get install -y libstdc++6 openssl libncurses5 locales curl && \
+    apt-get install -y libstdc++6 openssl libncurses6 locales curl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen

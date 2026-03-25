@@ -159,21 +159,36 @@ e2e-shell: ## Shell-based sidecar ↔ gRPC ↔ gateway protocol test
 	./test/e2e/sidecar_e2e_test.sh
 
 # --- E2E ---
+#
+# Docker e2e: Makefile manages infra (compose up/down), Go test is just an API client.
+# Cortex runs in Docker with socket mount so docker.ex can spawn worker containers.
+
+E2E_COMPOSE = docker compose -f e2e/docker-compose.yml
 
 e2e-local: sidecar-build worker-build ## Local processes: Cortex + sidecar + worker (mock agent)
 	cd e2e && go test -v -run TestExternalAgentE2E -timeout 300s
 
-e2e-docker-simple: sidecar-build worker-build ## Docker: single-team DAG (mock agent)
-	cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s
+e2e-docker-simple: docker-combo ## Docker: single-team DAG (mock agent)
+	$(E2E_COMPOSE) up -d --build --wait
+	cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s; \
+	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
-e2e-docker-multi: sidecar-build worker-build ## Docker: 3-team multi-tier DAG (mock agent)
-	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s
+e2e-docker-multi: docker-combo ## Docker: 3-team multi-tier DAG (mock agent)
+	$(E2E_COMPOSE) up -d --build --wait
+	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s; \
+	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
-e2e-docker-simple-claude: docker-combo-claude sidecar-build worker-build ## Docker: single-team DAG, real Claude
-	cd e2e && USE_CLAUDE=1 ANTHROPIC_API_KEY=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) go test -v -run TestDockerDAGSimple -timeout 300s
+e2e-docker-simple-claude: docker-combo-claude ## Docker: single-team DAG, real Claude
+	CLAUDE_COMMAND=claude ANTHROPIC_API_KEY=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) \
+	$(E2E_COMPOSE) up -d --build --wait
+	cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s; \
+	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
-e2e-docker-multi-claude: docker-combo-claude sidecar-build worker-build ## Docker: 3-team DAG, real Claude
-	cd e2e && USE_CLAUDE=1 ANTHROPIC_API_KEY=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) go test -v -run TestDockerDAGMultiTeam -timeout 300s
+e2e-docker-multi-claude: docker-combo-claude ## Docker: 3-team DAG, real Claude
+	CLAUDE_COMMAND=claude ANTHROPIC_API_KEY=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) \
+	$(E2E_COMPOSE) up -d --build --wait
+	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s; \
+	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
 # --- Builds ---
 
