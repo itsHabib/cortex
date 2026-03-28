@@ -87,8 +87,9 @@ teams:
 	assertContainersCleanedUp(t, d)
 }
 
-// TestDockerDAGMultiTeam runs a 3-team DAG with backend: docker.
-// Teams are in two tiers to test parallel + sequential execution with Docker.
+// TestDockerDAGMultiTeam runs a 5-team, 3-tier DAG with backend: docker.
+// Exercises parallel fan-out (tier 0: 3 teams), fan-in (tier 1: 1 team),
+// and a final synthesis (tier 2: 1 team).
 //
 // Prerequisite: Cortex must be running via docker compose (make e2e-docker-multi).
 func TestDockerDAGMultiTeam(t *testing.T) {
@@ -105,57 +106,118 @@ func TestDockerDAGMultiTeam(t *testing.T) {
 	}
 	t.Log("Cortex is up")
 
-	// 3-team DAG: researcher + analyst (tier 1, parallel), writer (tier 2, depends on both)
 	configYAML := fmt.Sprintf(`name: "%s-multi"
 defaults:
   model: haiku
-  max_turns: 5
+  max_turns: 20
   permission_mode: bypassPermissions
-  timeout_minutes: 5
+  timeout_minutes: 8
   provider: external
   backend: docker
 teams:
-  - name: researcher
+  # --- Tier 0: Three parallel research teams ---
+  - name: api-researcher
     lead:
-      role: "Researcher"
+      role: "API Design Researcher"
     tasks:
-      - summary: "Research task for e2e"
+      - summary: "Research REST API design patterns for a task management system"
+        details: |
+          Research best practices for REST API design applied to a task
+          management system. Cover: resource naming for tasks/projects/users,
+          filtering and pagination patterns, bulk operations, and webhook
+          design for status change notifications. Produce a concise summary
+          of recommendations (~20 lines).
+        deliverables:
+          - "api-patterns.md"
     depends_on: []
-  - name: analyst
+
+  - name: data-modeler
     lead:
-      role: "Analyst"
+      role: "Data Architect"
     tasks:
-      - summary: "Analysis task for e2e"
+      - summary: "Design a database schema for a task management system"
+        details: |
+          Design a PostgreSQL schema for a task management system. Include
+          tables for: projects, tasks (with status, priority, assignee),
+          comments, labels (M2M), and an activity log. Define primary keys,
+          foreign keys, indexes for common queries (tasks by project,
+          tasks by assignee, overdue tasks). Include an ASCII ER diagram.
+          Keep the output to ~30 lines.
+        deliverables:
+          - "schema.md"
     depends_on: []
-  - name: writer
+
+  - name: security-reviewer
     lead:
-      role: "Writer"
+      role: "Security Engineer"
     tasks:
-      - summary: "Writing task using research and analysis"
-    depends_on: [researcher, analyst]
+      - summary: "Define security requirements for a task management API"
+        details: |
+          Produce a lightweight threat model for a task management API.
+          Cover: authentication (JWT with refresh tokens), authorization
+          (project-level RBAC: owner/member/viewer), input validation rules,
+          rate limiting strategy, and audit logging for sensitive operations.
+          List the top 5 threats and their mitigations. Keep it to ~25 lines.
+        deliverables:
+          - "security.md"
+    depends_on: []
+
+  # --- Tier 1: Architecture synthesizes all research ---
+  - name: architect
+    lead:
+      role: "Software Architect"
+    tasks:
+      - summary: "Design the system architecture based on upstream research"
+        details: |
+          Based on the API research, data model, and security review from
+          upstream teams, design the application architecture. Define:
+          package/module structure, layer boundaries (handler -> service ->
+          repository), middleware chain (auth, rate-limit, logging),
+          configuration management, and error handling strategy. Include
+          a component diagram in ASCII. Keep it to ~40 lines.
+        deliverables:
+          - "architecture.md"
+    depends_on: [api-researcher, data-modeler, security-reviewer]
+
+  # --- Tier 2: Implementation plan depends on architecture ---
+  - name: tech-lead
+    lead:
+      role: "Tech Lead"
+    tasks:
+      - summary: "Produce the implementation plan and launch checklist"
+        details: |
+          Synthesize all upstream deliverables into a final implementation
+          plan. Include: file-by-file breakdown with implementation order,
+          test strategy (unit/integration/e2e with specific test cases),
+          CI/CD pipeline definition, and a launch checklist with go/no-go
+          criteria. Reference specific decisions from each upstream team.
+          Keep it to ~50 lines.
+        deliverables:
+          - "implementation-plan.md"
+    depends_on: [architect]
 `, dagRunName)
 
 	runID := createDAGRun(t, configYAML)
-	t.Logf("Created 3-team DAG run: %s", runID)
+	t.Logf("Created 5-team DAG run: %s", runID)
 
-	// Wait a bit and check for tier 1 containers (researcher + analyst)
-	time.Sleep(8 * time.Second)
+	// Wait a bit and check for tier 0 containers (3 parallel research teams)
+	time.Sleep(10 * time.Second)
 	containers, _ := d.listContainers("cortex.managed=true")
-	t.Logf("Containers active during tier 1: %d", len(containers))
+	t.Logf("Containers active during tier 0: %d", len(containers))
 	for _, c := range containers {
 		labels, _ := c["Labels"].(map[string]any)
 		state, _ := c["State"].(string)
 		t.Logf("  role=%v team=%v state=%v", labels["cortex.role"], labels["cortex.team"], state)
 	}
 
-	// Wait for run completion
-	finalStatus, err := waitForRunCompletion(runID, 180*time.Second)
+	// Wait for run completion (longer timeout for 3-tier DAG)
+	finalStatus, err := waitForRunCompletion(runID, 300*time.Second)
 	if err != nil {
 		dumpContainerState(t, d)
-		t.Fatalf("3-team DAG did not complete: %v", err)
+		t.Fatalf("5-team DAG did not complete: %v", err)
 	}
 
-	t.Logf("3-team DAG final status: %s", finalStatus)
+	t.Logf("5-team DAG final status: %s", finalStatus)
 	assertContainersCleanedUp(t, d)
 }
 

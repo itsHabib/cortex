@@ -173,9 +173,9 @@ e2e-docker-simple: docker-combo ## Docker: single-team DAG (mock agent)
 	cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s; \
 	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
-e2e-docker-multi: docker-combo ## Docker: 3-team multi-tier DAG (mock agent)
+e2e-docker-multi: docker-combo ## Docker: 5-team 3-tier DAG (mock agent)
 	$(E2E_COMPOSE) up -d --build --wait
-	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s; \
+	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 600s; \
 	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
 e2e-docker-simple-claude: docker-combo-claude ## Docker: single-team DAG, real Claude
@@ -184,10 +184,10 @@ e2e-docker-simple-claude: docker-combo-claude ## Docker: single-team DAG, real C
 	cd e2e && go test -v -run TestDockerDAGSimple -timeout 300s; \
 	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
-e2e-docker-multi-claude: docker-combo-claude ## Docker: 3-team DAG, real Claude
+e2e-docker-multi-claude: docker-combo-claude ## Docker: 5-team 3-tier DAG, real Claude
 	CLAUDE_COMMAND=claude ANTHROPIC_API_KEY=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) \
 	$(E2E_COMPOSE) up -d --build --wait
-	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 300s; \
+	cd e2e && go test -v -run TestDockerDAGMultiTeam -timeout 600s; \
 	EXIT=$$?; cd .. && $(E2E_COMPOSE) down; exit $$EXIT
 
 # --- Builds ---
@@ -231,10 +231,10 @@ e2e-k8s-simple: e2e-k8s-setup ## K8s: single-team DAG (mock agent)
 	cd e2e && go test -v -run TestK8sDAGSimple -timeout 300s; \
 	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
 
-e2e-k8s-multi: e2e-k8s-setup ## K8s: 3-team multi-tier DAG (mock agent)
+e2e-k8s-multi: e2e-k8s-setup ## K8s: 5-team 3-tier DAG (mock agent)
 	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
 	sleep 2
-	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 300s; \
+	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 600s; \
 	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
 
 e2e-k8s-setup-claude: ## Create kind cluster + load Claude images + deploy Cortex
@@ -260,7 +260,7 @@ e2e-k8s-simple-claude: e2e-k8s-setup-claude ## K8s: single-team DAG, real Claude
 	cd e2e && go test -v -run TestK8sDAGSimple -timeout 300s; \
 	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
 
-e2e-k8s-multi-claude: e2e-k8s-setup-claude ## K8s: 3-team DAG, real Claude
+e2e-k8s-multi-claude: e2e-k8s-setup-claude ## K8s: 5-team 3-tier DAG, real Claude
 	kubectl --context kind-$(K8S_CLUSTER) create secret generic anthropic-api-key \
 		--from-literal=key=$$(cat ../.key 2>/dev/null || echo $$ANTHROPIC_API_KEY) \
 		--dry-run=client -o yaml | kubectl --context kind-$(K8S_CLUSTER) apply -f -
@@ -268,7 +268,7 @@ e2e-k8s-multi-claude: e2e-k8s-setup-claude ## K8s: 3-team DAG, real Claude
 	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/cortex --timeout=60s
 	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
 	sleep 2
-	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 300s; \
+	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 600s; \
 	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
 
 e2e-k8s-teardown: ## Delete kind cluster

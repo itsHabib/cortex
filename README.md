@@ -205,13 +205,18 @@ make e2e-k8s-teardown                 # delete the kind cluster
 
 The Makefile manages the full lifecycle: kind cluster creation, image loading, deployment, and port-forwarding. The real-Claude targets patch the `anthropic-api-key` secret with your real key and set `CLAUDE_COMMAND=claude` on the Cortex deployment at runtime — no manifest changes needed.
 
-Watch agent pods during a test run:
+Watch agent pods during a test run with `kubectl --context kind-cortex-e2e get pods -w`:
 
-```bash
-kubectl --context kind-cortex-e2e get pods -w
+```
+NAME                                READY   STATUS        RESTARTS   AGE
+cortex-3b137ad5-api-researcher      2/2     Running       0          19s
+cortex-3b137ad5-data-modeler        2/2     Running       0          19s
+cortex-3b137ad5-security-reviewer   2/2     Running       0          19s
+cortex-796458bb74-7gt8n             1/1     Running       0          41s
+cortex-8675d68494-ssn8v             1/1     Terminating   0          54s
 ```
 
-You'll see Cortex roll out, then agent pods (e.g., `cortex-<run-id>-researcher`, `cortex-<run-id>-analyst`) spin up as the DAG executes.
+Three tier-0 agent pods (each with 2/2 containers: sidecar + worker) running in parallel, while the Cortex deployment finishes its rolling update.
 
 ## Quick Start
 
