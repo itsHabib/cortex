@@ -232,16 +232,16 @@ e2e-k8s-setup: ## Create kind cluster + load images + deploy Cortex
 	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/cortex --timeout=120s
 
 e2e-k8s-simple: e2e-k8s-setup ## K8s: single-team DAG (mock agent)
-	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
-	sleep 2
+	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 & PF_PID=$$!; \
+	sleep 2; \
 	cd e2e && go test -v -run TestK8sDAGSimple -timeout 300s; \
-	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
+	EXIT=$$?; kill $$PF_PID 2>/dev/null; exit $$EXIT
 
 e2e-k8s-multi: e2e-k8s-setup ## K8s: 5-team 3-tier DAG (mock agent)
-	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
-	sleep 2
+	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 & PF_PID=$$!; \
+	sleep 2; \
 	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 600s; \
-	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
+	EXIT=$$?; kill $$PF_PID 2>/dev/null; exit $$EXIT
 
 e2e-k8s-setup-claude: ## Create kind cluster + load Claude images + deploy Cortex
 	kind create cluster --name $(K8S_CLUSTER) 2>/dev/null || true
@@ -261,10 +261,10 @@ e2e-k8s-simple-claude: e2e-k8s-setup-claude ## K8s: single-team DAG, real Claude
 		--dry-run=client -o yaml | kubectl --context kind-$(K8S_CLUSTER) apply -f -
 	kubectl --context kind-$(K8S_CLUSTER) set env deployment/cortex CLAUDE_COMMAND=claude
 	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/cortex --timeout=60s
-	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
-	sleep 2
+	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 & PF_PID=$$!; \
+	sleep 2; \
 	cd e2e && go test -v -run TestK8sDAGSimple -timeout 300s; \
-	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
+	EXIT=$$?; kill $$PF_PID 2>/dev/null; exit $$EXIT
 
 e2e-k8s-multi-claude: e2e-k8s-setup-claude ## K8s: 5-team 3-tier DAG, real Claude
 	kubectl --context kind-$(K8S_CLUSTER) create secret generic anthropic-api-key \
@@ -272,10 +272,10 @@ e2e-k8s-multi-claude: e2e-k8s-setup-claude ## K8s: 5-team 3-tier DAG, real Claud
 		--dry-run=client -o yaml | kubectl --context kind-$(K8S_CLUSTER) apply -f -
 	kubectl --context kind-$(K8S_CLUSTER) set env deployment/cortex CLAUDE_COMMAND=claude
 	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/cortex --timeout=60s
-	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 &
-	sleep 2
+	kubectl --context kind-$(K8S_CLUSTER) port-forward svc/cortex 4000:4000 4001:4001 & PF_PID=$$!; \
+	sleep 2; \
 	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 600s; \
-	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
+	EXIT=$$?; kill $$PF_PID 2>/dev/null; exit $$EXIT
 
 e2e-k8s-observability: ## Deploy Loki + Promtail + Prometheus + Grafana into kind
 	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/observability/loki.yaml
