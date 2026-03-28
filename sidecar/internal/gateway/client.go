@@ -216,7 +216,15 @@ func (c *Client) dispatch(msg *pb.GatewayMessage) {
 			TaskReq:  m.TaskRequest,
 			Received: time.Now(),
 		})
-		c.logger.Info("received task request", "task_id", m.TaskRequest.GetTaskId())
+		ctx := m.TaskRequest.GetContext()
+		c.logger.Info("received task request",
+			"task_id", m.TaskRequest.GetTaskId(),
+			"prompt_len", len(m.TaskRequest.GetPrompt()),
+			"tools_count", len(m.TaskRequest.GetTools()),
+			"timeout_ms", m.TaskRequest.GetTimeoutMs(),
+			"run_id", ctx["run_id"],
+			"team", ctx["team"],
+		)
 
 	case *pb.GatewayMessage_PeerRequest:
 		c.store.PushMessage(state.Message{

@@ -95,11 +95,24 @@ func (s *Server) handleSubmitTaskResult(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	s.logger.Info("forwarding task result to gateway",
+		"task_id", req.TaskID,
+		"status", req.Status,
+		"duration_ms", req.DurationMs,
+		"input_tokens", req.InputTokens,
+		"output_tokens", req.OutputTokens,
+		"cache_read_tokens", req.CacheReadTokens,
+		"cache_creation_tokens", req.CacheCreationTokens,
+		"num_turns", req.NumTurns,
+		"cost_usd", req.CostUSD,
+	)
+
 	if err := s.gateway.SendTaskResult(r.Context(), req.TaskID, req.Status, req.ResultText, req.DurationMs, req.InputTokens, req.OutputTokens); err != nil {
-		s.logger.Error("failed to send task result", "error", err)
+		s.logger.Error("failed to send task result", "task_id", req.TaskID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to send task result", "INTERNAL_ERROR")
 		return
 	}
 
+	s.logger.Info("task result accepted by gateway", "task_id", req.TaskID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }

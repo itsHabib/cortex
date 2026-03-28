@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -80,7 +81,17 @@ func main() {
 			continue
 		}
 
-		logger.Info("received task", "task_id", task.TaskID)
+		promptPreview := task.Prompt
+		if len(promptPreview) > 200 {
+			promptPreview = promptPreview[:200] + "..."
+		}
+		logger.Info("received task",
+			"task_id", task.TaskID,
+			"prompt_len", len(task.Prompt),
+			"prompt_preview", promptPreview,
+			"tools", task.Tools,
+			"timeout_ms", task.TimeoutMs,
+		)
 
 		// Run task — mock mode returns canned output, otherwise runs claude -p
 		start := time.Now()
@@ -90,9 +101,16 @@ func main() {
 		)
 		if claudeCmd == "mock" {
 			cr = mockResult(task.Prompt)
-			logger.Info("mock agent completed", "task_id", task.TaskID)
+			logger.Info("mock agent completed", "task_id", task.TaskID, "duration", time.Since(start))
 		} else {
-			cr, runErr = runClaude(claudeCmd, task.Prompt, claudeModel, claudeMaxTurns, claudePermMode)
+			logger.Info("starting claude",
+				"task_id", task.TaskID,
+				"command", claudeCmd,
+				"model", claudeModel,
+				"max_turns", claudeMaxTurns,
+				"permission_mode", claudePermMode,
+			)
+			cr, runErr = runClaude(claudeCmd, task.Prompt, claudeModel, claudeMaxTurns, claudePermMode, logger)
 		}
 		duration := time.Since(start)
 
@@ -101,12 +119,22 @@ func main() {
 			errResult := &claudeResult{ResultText: fmt.Sprintf("claude error: %v", runErr)}
 			submitResult(sidecarURL, task.TaskID, "failed", errResult, duration, logger)
 		} else {
+			resultPreview := cr.ResultText
+			if len(resultPreview) > 200 {
+				resultPreview = resultPreview[:200] + "..."
+			}
 			logger.Info("claude completed",
 				"task_id", task.TaskID,
 				"duration", duration,
 				"input_tokens", cr.InputTokens,
 				"output_tokens", cr.OutputTokens,
+				"cache_read_tokens", cr.CacheReadTokens,
+				"cache_creation_tokens", cr.CacheCreationTokens,
+				"num_turns", cr.NumTurns,
 				"cost_usd", cr.CostUSD,
+				"session_id", cr.SessionID,
+				"result_len", len(cr.ResultText),
+				"result_preview", resultPreview,
 			)
 			submitResult(sidecarURL, task.TaskID, "completed", cr, duration, logger)
 		}
@@ -161,8 +189,10 @@ type claudeResult struct {
 	SessionID string
 }
 
-// runClaude executes the claude CLI with the given prompt and parses NDJSON output.
-func runClaude(command string, prompt string, model string, maxTurns string, permMode string) (*claudeResult, error) {
+// runClaude executes the claude CLI with the given prompt and streams NDJSON
+// events in real-time. Each event is logged as it arrives so agent activity
+// (tool calls, responses, thinking) is visible in Grafana while running.
+func runClaude(command string, prompt string, model string, maxTurns string, permMode string, logger *slog.Logger) (*claudeResult, error) {
 	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
 	if model != "" {
 		args = append(args, "--model", model)
@@ -179,20 +209,22 @@ func runClaude(command string, prompt string, model string, maxTurns string, per
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
-	// claude -p buffers all NDJSON output until exit, so we collect
-	// it all at once and parse token counts from the final output.
-	output, err := cmd.Output()
+	// Stream stdout line-by-line so NDJSON events are logged in real-time.
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		stderr := strings.TrimSpace(stderrBuf.String())
-		if stderr != "" {
-			return nil, fmt.Errorf("command failed: %w; stderr: %s", err, stderr)
-		}
-		return nil, fmt.Errorf("command failed: %w", err)
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
 	}
 
 	result := &claudeResult{}
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB max line
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
@@ -200,10 +232,69 @@ func runClaude(command string, prompt string, model string, maxTurns string, per
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
+		logEvent(event, logger)
 		processEvent(event, result)
 	}
 
+	if err := cmd.Wait(); err != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		if stderr != "" {
+			return nil, fmt.Errorf("command failed: %w; stderr: %s", err, stderr)
+		}
+		return nil, fmt.Errorf("command failed: %w", err)
+	}
+
 	return result, nil
+}
+
+// logEvent logs interesting NDJSON events from the claude process in real-time.
+func logEvent(event map[string]any, logger *slog.Logger) {
+	eventType, _ := event["type"].(string)
+
+	switch eventType {
+	case "system":
+		sessionID, _ := event["session_id"].(string)
+		logger.Info("claude session started", "session_id", sessionID)
+
+	case "assistant":
+		msg, _ := event["message"].(map[string]any)
+		content, _ := msg["content"].([]any)
+		for _, block := range content {
+			b, ok := block.(map[string]any)
+			if !ok {
+				continue
+			}
+			blockType, _ := b["type"].(string)
+			switch blockType {
+			case "text":
+				text, _ := b["text"].(string)
+				preview := text
+				if len(preview) > 300 {
+					preview = preview[:300] + "..."
+				}
+				logger.Info("claude response",
+					"type", "text",
+					"length", len(text),
+					"preview", preview,
+				)
+			case "tool_use":
+				toolName, _ := b["name"].(string)
+				toolID, _ := b["id"].(string)
+				logger.Info("claude tool call",
+					"tool", toolName,
+					"tool_id", toolID,
+				)
+			}
+		}
+
+	case "result":
+		costUSD, _ := event["cost_usd"].(float64)
+		numTurns, _ := event["num_turns"].(float64)
+		logger.Info("claude finished",
+			"cost_usd", costUSD,
+			"num_turns", int(numTurns),
+		)
+	}
 }
 
 // processEvent extracts fields from a single NDJSON event into the result.
