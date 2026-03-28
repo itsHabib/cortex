@@ -1,0 +1,212 @@
+# Grafana dashboards — mounted as files into the Grafana pod.
+# Contains: Cortex Run Monitoring (metrics) + Agent Logs (Loki).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: default
+data:
+  cortex-runs.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Runs Started (total)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "targets": [{ "expr": "cortex_run_started_team_count", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+        },
+        {
+          "title": "Teams Completed (total)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "targets": [{ "expr": "cortex_team_completed_duration_ms", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+        },
+        {
+          "title": "Total Cost (USD)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "targets": [{ "expr": "cortex_team_completed_cost_usd_sum", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] }
+        },
+        {
+          "title": "Run Duration Distribution",
+          "type": "histogram",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "targets": [{ "expr": "cortex_run_completed_duration_ms_bucket", "refId": "A", "format": "heatmap" }],
+          "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+        },
+        {
+          "title": "Runs Over Time",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "targets": [{ "expr": "rate(cortex_run_started_team_count[5m])", "legendFormat": "runs/s", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["cortex"],
+      "templating": { "list": [] },
+      "time": { "from": "now-1h", "to": "now" },
+      "title": "Cortex Run Monitoring",
+      "uid": "cortex-runs"
+    }
+  agent-logs.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "title": "Cortex Server",
+          "type": "logs",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+              "expr": "{job=\"cortex\", team=\"\"} |= \"$search\"",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "showTime": true,
+            "showLabels": false,
+            "wrapLogMessage": true,
+            "enableLogDetails": true,
+            "sortOrder": "Descending"
+          }
+        },
+        {
+          "title": "Agent Logs — $team",
+          "type": "logs",
+          "gridPos": { "h": 16, "w": 24, "x": 0, "y": 10 },
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+              "expr": "{job=\"cortex\", run_id=~\"$run_id\", team=~\"$team\", container=~\"$container\", team!=\"\"} |= \"$search\"",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "showTime": true,
+            "showLabels": true,
+            "wrapLogMessage": true,
+            "enableLogDetails": true,
+            "sortOrder": "Descending"
+          }
+        },
+        {
+          "title": "Log Volume by Team",
+          "type": "timeseries",
+          "gridPos": { "h": 6, "w": 24, "x": 0, "y": 26 },
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+              "expr": "sum by (team) (count_over_time({job=\"cortex\", run_id=~\"$run_id\", team=~\"$team\", container=~\"$container\", team!=\"\"} [$__interval]))",
+              "legendFormat": "{{team}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "normal" } }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "title": "Sidecar — $team",
+          "type": "logs",
+          "gridPos": { "h": 12, "w": 12, "x": 0, "y": 32 },
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+              "expr": "{job=\"cortex\", container=\"sidecar\", run_id=~\"$run_id\", team=~\"$team\", team!=\"\"}",
+              "refId": "A"
+            }
+          ],
+          "options": { "showTime": true, "showLabels": true, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending" }
+        },
+        {
+          "title": "Worker — $team",
+          "type": "logs",
+          "gridPos": { "h": 12, "w": 12, "x": 12, "y": 32 },
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+              "expr": "{job=\"cortex\", container=\"worker\", run_id=~\"$run_id\", team=~\"$team\", team!=\"\"}",
+              "refId": "A"
+            }
+          ],
+          "options": { "showTime": true, "showLabels": true, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending" }
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["cortex", "logs"],
+      "templating": {
+        "list": [
+          {
+            "name": "DS_LOKI",
+            "type": "datasource",
+            "query": "loki",
+            "current": { "text": "Loki", "value": "Loki" },
+            "hide": 0
+          },
+          {
+            "name": "run_id",
+            "type": "query",
+            "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+            "query": "label_values({job=\"cortex\", run_id!=\"\"}, run_id)",
+            "refresh": 2,
+            "includeAll": true,
+            "allValue": ".+",
+            "current": { "text": "All", "value": "$__all" },
+            "label": "Run ID"
+          },
+          {
+            "name": "team",
+            "type": "query",
+            "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+            "query": "label_values({job=\"cortex\", team!=\"\", run_id=~\"$run_id\"}, team)",
+            "refresh": 2,
+            "includeAll": true,
+            "allValue": ".+",
+            "current": { "text": "All", "value": "$__all" },
+            "label": "Team"
+          },
+          {
+            "name": "container",
+            "type": "query",
+            "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+            "query": "label_values({job=\"cortex\", team!=\"\"}, container)",
+            "refresh": 2,
+            "includeAll": true,
+            "allValue": ".+",
+            "current": { "text": "All", "value": "$__all" },
+            "label": "Container"
+          },
+          {
+            "name": "search",
+            "type": "textbox",
+            "current": { "text": "", "value": "" },
+            "label": "Search"
+          }
+        ]
+      },
+      "time": { "from": "now-30m", "to": "now" },
+      "title": "Cortex Agent Logs",
+      "uid": "cortex-agent-logs"
+    }

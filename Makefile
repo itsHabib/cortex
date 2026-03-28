@@ -1,4 +1,4 @@
-.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-elixir-all e2e-local e2e-docker-simple e2e-docker-multi e2e-docker-simple-claude e2e-docker-multi-claude docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check docker-combo docker-combo-claude e2e-k8s-setup e2e-k8s-setup-claude e2e-k8s-simple e2e-k8s-multi e2e-k8s-simple-claude e2e-k8s-multi-claude e2e-k8s-teardown
+.PHONY: setup test check lint run server up down clean status proto proto-lint proto-breaking proto-check test-integration test-elixir-all e2e-local e2e-docker-simple e2e-docker-multi e2e-docker-simple-claude e2e-docker-multi-claude docker-integration e2e-shell e2e-elixir sidecar-build worker-build sidecar-test sidecar-lint sidecar-check docker-combo docker-combo-claude e2e-k8s-setup e2e-k8s-setup-claude e2e-k8s-simple e2e-k8s-multi e2e-k8s-simple-claude e2e-k8s-multi-claude e2e-k8s-observability e2e-k8s-teardown
 
 # -- Development --
 
@@ -270,6 +270,21 @@ e2e-k8s-multi-claude: e2e-k8s-setup-claude ## K8s: 5-team 3-tier DAG, real Claud
 	sleep 2
 	cd e2e && go test -v -run TestK8sDAGMultiTeam -timeout 600s; \
 	EXIT=$$?; kill %1 2>/dev/null; exit $$EXIT
+
+e2e-k8s-observability: ## Deploy Loki + Promtail + Prometheus + Grafana into kind
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/observability/loki.yaml
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/observability/promtail.yaml
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/observability/prometheus.yaml
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/observability/grafana-dashboards.yaml
+	kubectl --context kind-$(K8S_CLUSTER) apply -f e2e/k8s/observability/grafana.yaml
+	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/loki --timeout=60s
+	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/prometheus --timeout=60s
+	kubectl --context kind-$(K8S_CLUSTER) rollout status deployment/grafana --timeout=60s
+	@echo ""
+	@echo "=== Observability stack deployed ==="
+	@echo "  Port-forward Grafana:  kubectl --context kind-$(K8S_CLUSTER) port-forward svc/grafana 3000:3000"
+	@echo "  Open:                  http://localhost:3000  (admin / cortex)"
+	@echo "  Dashboards:            Cortex Run Monitoring, Cortex Agent Logs"
 
 e2e-k8s-teardown: ## Delete kind cluster
 	kind delete cluster --name $(K8S_CLUSTER)

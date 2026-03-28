@@ -218,6 +218,25 @@ cortex-8675d68494-ssn8v             1/1     Terminating   0          54s
 
 Three tier-0 agent pods (each with 2/2 containers: sidecar + worker) running in parallel, while the Cortex deployment finishes its rolling update.
 
+### Observability (optional)
+
+Deploy Loki + Promtail + Prometheus + Grafana into the kind cluster for live logs and metrics during test runs:
+
+```bash
+make e2e-k8s-setup-claude             # kind cluster + Cortex
+make e2e-k8s-observability            # deploy observability stack
+kubectl --context kind-cortex-e2e port-forward svc/grafana 3000:3000 &
+# open http://localhost:3000 (admin / cortex)
+make e2e-k8s-multi-claude             # run test — logs flow to Grafana
+```
+
+Two pre-provisioned dashboards:
+
+- **Cortex Run Monitoring** — run counts, team completion, cost distribution, duration histograms (Prometheus)
+- **Cortex Agent Logs** — filter by run ID, team, container (sidecar/worker), free-text search, log volume by team (Loki)
+
+Promtail runs as a DaemonSet and automatically picks up `cortex.dev/run-id` and `cortex.dev/team` pod labels as Loki labels for filtering.
+
 ## Quick Start
 
 ### Prerequisites
@@ -272,11 +291,13 @@ mix cortex.resume /path/to/workspace --auto-retry --retry-delay 120
 
 You can also launch runs directly from the dashboard at `http://localhost:4000`.
 
-### Full stack (with Grafana)
+### Full stack (with Grafana + Loki)
 
 ```bash
-make up    # Phoenix:4000 + Prometheus:9090 + Grafana:3000 (admin/cortex)
+make up    # Phoenix:4000 + Prometheus:9090 + Loki:3100 + Grafana:3000 (admin/cortex)
 ```
+
+Grafana comes with two dashboards: **Cortex Run Monitoring** (metrics) and **Cortex Agent Logs** (logs from Docker containers, filterable by run/team/container).
 
 ## Configuration
 

@@ -1,0 +1,28 @@
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Scrape Docker container logs — picks up cortex-managed containers
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Use container name as the log stream label
+      - source_labels: ["__meta_docker_container_name"]
+        target_label: "container"
+      # Pick up cortex labels for filtering
+      - source_labels: ["__meta_docker_container_label_cortex_team"]
+        target_label: "team"
+      - source_labels: ["__meta_docker_container_label_cortex_role"]
+        target_label: "role"
+      - source_labels: ["__meta_docker_container_label_cortex_run_id"]
+        target_label: "run_id"
+      - source_labels: ["__meta_docker_container_label_cortex_managed"]
+        target_label: "cortex_managed"

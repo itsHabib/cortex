@@ -329,6 +329,7 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
           >
             <option value="local" selected={@backend == "local"}>Local</option>
             <option value="docker" selected={@backend == "docker"}>Docker</option>
+            <option value="k8s" selected={@backend == "k8s"}>Kubernetes</option>
           </select>
         </div>
       </div>
@@ -344,7 +345,7 @@ defmodule CortexWeb.WorkflowsLive.DAGPanel do
           <span class="text-xs text-gray-400">Debug mode — preserve containers after run for inspection</span>
         </label>
       <% end %>
-      <p class="text-xs text-gray-600 mt-2">Docker backend requires provider "External".</p>
+      <p class="text-xs text-gray-600 mt-2">Docker and Kubernetes backends require provider "External".</p>
     </div>
     """
   end
