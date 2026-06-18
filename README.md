@@ -1,10 +1,12 @@
 # Cortex
 
+> **Status: parked / superseded (last active 2026-03-30).** Cortex is a complete, dogfooded system — Phases 1–11 shipped, with Docker and Kubernetes backends and HITL tier gates — but the portfolio has since converged on a smaller, language-agnostic DAG runner. The DAG-orchestration concept lives on in **[orchestra](../orchestra)** (a minimal Go rewrite of the same tier-by-tier execution model); downstream consumers that needed only orchestration moved to orchestra or the direct Anthropic SDK. This repo stays as the reference implementation of the full Elixir/OTP take — three coordination modes, real-time LiveView dashboard, container/K8s spawning. Everything below is accurate and runnable; it just isn't where new work happens. Read orchestra first if you're starting fresh.
+
 Multi-agent orchestration system built on Elixir/OTP. Cortex manages teams of AI agents that collaborate on complex, multi-step objectives via `claude -p` processes.
 
 It supports three coordination modes: **DAG orchestration** for structured, dependency-aware execution, **mesh** for autonomous agents with optional peer messaging, and **gossip protocol** for emergent, decentralized knowledge sharing.
 
-Built on Elixir/OTP because the problem is inherently concurrent — dozens of long-lived agent processes, message routing, failure detection, real-time streaming. OTP provides supervision trees, GenServers, Erlang ports, PubSub, and Phoenix LiveView out of the box. Every piece of infrastructure that would need to be hand-rolled in other stacks comes for free.
+Built on Elixir/OTP because the problem is inherently concurrent — dozens of long-lived agent processes, message routing, failure detection, real-time streaming. OTP provides the supervision trees, GenServers, Erlang ports, PubSub, and Phoenix LiveView this needs out of the box.
 
 ![Mesh — animated communication graph](priv/static/images/mesh-overview.jpg)
 
@@ -57,7 +59,7 @@ Autonomous agents with optional peer messaging. Each agent gets a roster of who 
 - SWIM-inspired membership — agents tracked through alive → suspect → dead lifecycle states
 - Failure detection — periodic heartbeat checks with configurable suspect/dead timeouts
 - Message relay — outbox polling delivers cross-agent messages via file-based inboxes
-- Thin orchestrator (~300 LOC) — spawn agents, provide roster, get out of the way
+- Thin orchestrator — spawn agents, provide roster, get out of the way
 
 ### Gossip
 
@@ -178,7 +180,7 @@ Environment variables for the K8s backend:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `K8S_NAMESPACE` | `default` | Namespace for agent pods |
+| `K8S_NAMESPACE` | `cortex` | Namespace for agent pods |
 | `K8S_GATEWAY_URL` | `cortex-gateway:4001` | gRPC gateway address (from inside the cluster) |
 | `K8S_SIDECAR_IMAGE` | `cortex-agent-worker:latest` | Sidecar container image |
 | `K8S_WORKER_IMAGE` | `cortex-agent-worker:latest` | Worker container image |
@@ -425,7 +427,7 @@ Runner, DAG engine, Spawner (port-based process management, NDJSON parsing), Wor
 
 ### Mesh (`lib/cortex/mesh/`)
 
-Member struct with state machine, MemberList GenServer, Detector (heartbeat), Prompt builder, MessageRelay, SessionRunner (~300 LOC), ephemeral Supervisor.
+Member struct with state machine, MemberList GenServer, Detector (heartbeat), Prompt builder, MessageRelay, SessionRunner, ephemeral Supervisor.
 
 ### Gossip (`lib/cortex/gossip/`)
 
