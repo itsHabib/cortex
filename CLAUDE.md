@@ -53,3 +53,15 @@ mix run bench/dag_bench.exs        # DAG benchmarks
 - `mix dialyzer` — static type checking (first run builds PLT, takes a few min)
 - `make lint` — runs both
 - `.dialyzer_ignore.exs` — known false positives (Mix tasks, defensive catch-alls)
+
+<!-- local-offload:start -->
+## Local-first offload
+
+Before spending cloud tokens on a mechanical sub-step, check for a free local path (needs the `local` CLI / Ollama on this machine):
+
+- Narrowing a big file list, extracting structure from noisy tool output, shallow classification -> `/offload`
+- "Have we solved/decided this before?" questions about the operator's own work -> `/ask-portfolio`
+- Triaging a PR's bot-comment pile -> `/review-digest <PR#>`
+
+Deep judgment (code review, risk calls, dense-diff reasoning) stays with the primary model. If `local` is not on PATH, skip silently -- never block on this.
+<!-- local-offload:end -->
